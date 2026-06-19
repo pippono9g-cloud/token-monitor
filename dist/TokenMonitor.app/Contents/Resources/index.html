@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Token Monitor</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="limits-panel" aria-label="Claude plan usage limits">
+      <button class="close-button" id="closeButton" type="button" aria-label="Close">×</button>
+
+      <header class="limits-header">
+        <strong>Plan usage limits</strong>
+        <span>Pro</span>
+      </header>
+
+      <section class="limit-section current-section" aria-label="Current session usage">
+        <div class="limit-copy">
+          <h1>Current session</h1>
+          <p id="sessionResetText">Starts when a message is sent</p>
+        </div>
+        <div class="limit-meter" aria-hidden="true">
+          <div class="limit-fill session-fill" id="sessionBar"></div>
+        </div>
+        <div class="limit-percent" id="sessionPercent">0% used</div>
+      </section>
+
+      <section class="weekly-heading" aria-label="Weekly limits heading">
+        <h2>Weekly limits</h2>
+      </section>
+
+      <section class="limit-section weekly-section" aria-label="Weekly usage">
+        <div class="limit-copy">
+          <h1>All models</h1>
+          <p id="weeklyResetLabel">Resets Friday 12:59 AM</p>
+        </div>
+        <div class="limit-meter" aria-hidden="true">
+          <div class="limit-fill weekly-fill" id="weeklyBar"></div>
+        </div>
+        <div id="dailyBar" style="display:none"></div>
+        <div class="limit-percent" id="weeklyPercentLabel">0% used</div>
+      </section>
+
+      <footer class="limits-footer">
+        <span id="lastUpdated">Last updated: never</span>
+        <button class="refresh-button" id="syncClaudeButton" type="button" aria-label="Refresh">↻</button>
+      </footer>
+    </main>
+
+    <div class="hidden-app-state" aria-hidden="true">
+      <div id="usageTooltip"></div>
+      <div id="entries"></div>
+      <div id="emptyState"></div>
+      <span id="totalTokens">0</span>
+      <span id="totalCost">$0.00</span>
+      <span id="entryCount">0</span>
+      <button id="resetButton" type="button"></button>
+
+      <form id="entryForm">
+        <input id="dailyLimit" type="number" value="100000" />
+        <input id="weeklyLimit" type="number" value="700000" />
+        <input id="dailyReset" type="time" value="00:00" />
+        <select id="weeklyResetDay">
+          <option value="5">Friday</option>
+          <option value="1">Monday</option>
+          <option value="2">Tuesday</option>
+          <option value="3">Wednesday</option>
+          <option value="4">Thursday</option>
+          <option value="6">Saturday</option>
+          <option value="0">Sunday</option>
+        </select>
+        <input id="anthropicKey" type="password" />
+        <p id="claudeSyncStatus"></p>
+        <select id="modelInput">
+          <option value="claude">Claude</option>
+        </select>
+        <input id="inputTokens" type="number" value="0" />
+        <input id="outputTokens" type="number" value="0" />
+        <input id="priceInput" type="number" value="3" />
+        <input id="noteInput" type="text" />
+        <input id="manualSessionPercent" type="number" value="0" />
+        <input id="manualWeeklyPercent" type="number" value="7" />
+        <input id="manualWeeklyReset" type="text" value="Fri 12:59 AM" />
+      </form>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash mac/build-mac-app.sh)",
+      "Bash(cat ~/Desktop/token-monitor-debug.txt 2>/dev/null || echo \"FILE NOT FOUND\")",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(ls /usr/local/bin/node /opt/homebrew/bin/node ~/.nvm/versions/node/*/bin/node 2>/dev/null | head -3)"
+    ]
+  }
+}
