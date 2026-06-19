@@ -165,27 +165,72 @@
   [self fetchClaudeUsageWithAPIKey:apiKey startIso:startIso endIso:endIso];
 }
 
-// Reads the live OAuth access token Claude Code keeps fresh in the login keychain.
+// Reads the claudeAiOauth credentials dict Claude Code keeps in the login keychain.
 // This token carries the user:profile scope the usage endpoint requires (unlike setup-token).
-- (NSString *)oauthTokenFromKeychain {
+- (NSDictionary *)claudeCredentials {
   NSTask *task = [[NSTask alloc] init];
   task.launchPath = @"/usr/bin/security";
   task.arguments = @[@"find-generic-password", @"-s", @"Claude Code-credentials", @"-w"];
   NSPipe *outPipe = [NSPipe pipe];
   task.standardOutput = outPipe;
   task.standardError = [NSPipe pipe];
-  @try { [task launch]; } @catch (NSException *e) { return @""; }
+  @try { [task launch]; } @catch (NSException *e) { return nil; }
   NSData *data = [[outPipe fileHandleForReading] readDataToEndOfFile];
   [task waitUntilExit];
-  if (task.terminationStatus != 0 || data.length == 0) return @"";
+  if (task.terminationStatus != 0 || data.length == 0) return nil;
   NSDictionary *j = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-  if (![j isKindOfClass:[NSDictionary class]]) return @"";
+  if (![j isKindOfClass:[NSDictionary class]]) return nil;
   NSDictionary *o = j[@"claudeAiOauth"];
-  if (![o isKindOfClass:[NSDictionary class]]) return @"";
-  NSString *t = o[@"accessToken"];
+  return [o isKindOfClass:[NSDictionary class]] ? o : nil;
+}
+
+- (NSString *)oauthTokenFromKeychain {
+  NSString *t = [self claudeCredentials][@"accessToken"];
   return [t isKindOfClass:[NSString class]] ? t : @"";
 }
 
+- (NSString *)claudeBinaryPath {
+  NSArray *cands = @[[NSHomeDirectory() stringByAppendingPathComponent:@".local/bin/claude"],
+                     @"/opt/homebrew/bin/claude", @"/usr/local/bin/claude", @"/usr/bin/claude"];
+  for (NSString *p in cands) {
+    if ([[NSFileManager defaultManager] isExecutableFileAtPath:p]) return p;
+  }
+  return nil;
+}
+
+// Runs `claude auth status` so Claude Code refreshes the keychain token if it has expired.
+// Non-interactive and cheap (no model usage). Must be called off the main thread.
+- (void)triggerClaudeRefresh {
+  NSString *bin = [self claudeBinaryPath];
+  if (!bin) return;
+  NSTask *task = [[NSTask alloc] init];
+  task.launchPath = bin;
+  task.arguments = @[@"auth", @"status"];
+  task.standardOutput = [NSPipe pipe];
+  task.standardError = [NSPipe pipe];
+  @try { [task launch]; } @catch (NSException *e) { return; }
+  @try { [task waitUntilExit]; } @catch (NSException *e) { return; }
+}
+
+// Background-only: returns a fresh access token, proactively refreshing via Claude Code
+// when the keychain token is within 5 minutes of expiry. Falls back to a pasted token.
+- (NSString *)freshOAuthToken {
+  NSDictionary *creds = [self claudeCredentials];
+  if (creds) {
+    double expMs = [creds[@"expiresAt"] doubleValue];
+    double nowMs = [[NSDate date] timeIntervalSince1970] * 1000.0;
+    if (expMs > 0 && (expMs - nowMs) < 5 * 60 * 1000) {
+      [self triggerClaudeRefresh];
+      creds = [self claudeCredentials] ?: creds;
+    }
+    NSString *t = creds[@"accessToken"];
+    if ([t isKindOfClass:[NSString class]] && [t length] > 0) return t;
+  }
+  NSString *t = [[NSUserDefaults standardUserDefaults] stringForKey:@"claudeOAuthToken"];
+  return [t stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] ?: @"";
+}
+
+// Fast, main-thread-safe check used for the menu title (no refresh).
 - (NSString *)oauthToken {
   NSString *kc = [self oauthTokenFromKeychain];
   if (kc.length > 0) return kc;
@@ -216,8 +261,15 @@
 }
 
 - (void)readClaudeDesktopUsage {
-  if ([self fetchUsageViaOAuthToken]) return;
-  [self readClaudeDesktopWebUsage];
+  // Resolve (and possibly refresh) the OAuth token off the main thread.
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    NSString *token = [self freshOAuthToken];
+    if (token.length > 0) {
+      [self fetchUsageWithToken:token];
+    } else {
+      dispatch_async(dispatch_get_main_queue(), ^{ [self readClaudeDesktopWebUsage]; });
+    }
+  });
 }
 
 - (void)readClaudeDesktopWebUsage {
@@ -392,11 +444,7 @@
   return [f stringFromDate:date];
 }
 
-// Returns YES if an OAuth token is configured (and this path will handle the read).
-- (BOOL)fetchUsageViaOAuthToken {
-  NSString *token = [self oauthToken];
-  if (token.length == 0) return NO;
-
+- (void)fetchUsageWithToken:(NSString *)token {
   NSURL *url = [NSURL URLWithString:@"https://api.anthropic.com/api/oauth/usage"];
   NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:20];
   req.HTTPMethod = @"GET";
@@ -447,7 +495,6 @@
     });
   }];
   [task resume];
-  return YES;
 }
 
 - (void)fetchClaudeUsageWithAPIKey:(NSString *)apiKey startIso:(NSString *)startIso endIso:(NSString *)endIso {
