@@ -1,0 +1,7 @@
+.DS_Store
+.build/
+dist/TokenMonitor.app/Contents/_CodeSignature/
+dist/TokenMonitor.app/Contents/MacOS/TokenMonitor
+dist/TokenMonitor.app/Contents/PkgInfo
+.claude/settings.local.json
+Stop TokenMonitor.command
