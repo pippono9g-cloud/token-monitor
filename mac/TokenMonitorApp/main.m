@@ -95,6 +95,9 @@
   [menu addItemWithTitle:@"Open Token Monitor" action:@selector(openWindowFromMenu:) keyEquivalent:@""];
   [menu addItemWithTitle:@"Refresh" action:@selector(refreshFromMenu:) keyEquivalent:@"r"];
   [menu addItem:[NSMenuItem separatorItem]];
+  NSString *tokenTitle = [self oauthToken].length > 0 ? @"API: เรียลไทม์ ✓ (เชื่อม Claude Code)" : @"ตั้งค่า API เรียลไทม์…";
+  [menu addItemWithTitle:tokenTitle action:@selector(setOAuthTokenFromMenu:) keyEquivalent:@""];
+  [menu addItem:[NSMenuItem separatorItem]];
   [menu addItemWithTitle:@"Quit" action:@selector(quitFromMenu:) keyEquivalent:@"q"];
   self.statusItem.menu = menu;
   [self.statusItem.button performClick:nil];
@@ -162,7 +165,62 @@
   [self fetchClaudeUsageWithAPIKey:apiKey startIso:startIso endIso:endIso];
 }
 
+// Reads the live OAuth access token Claude Code keeps fresh in the login keychain.
+// This token carries the user:profile scope the usage endpoint requires (unlike setup-token).
+- (NSString *)oauthTokenFromKeychain {
+  NSTask *task = [[NSTask alloc] init];
+  task.launchPath = @"/usr/bin/security";
+  task.arguments = @[@"find-generic-password", @"-s", @"Claude Code-credentials", @"-w"];
+  NSPipe *outPipe = [NSPipe pipe];
+  task.standardOutput = outPipe;
+  task.standardError = [NSPipe pipe];
+  @try { [task launch]; } @catch (NSException *e) { return @""; }
+  NSData *data = [[outPipe fileHandleForReading] readDataToEndOfFile];
+  [task waitUntilExit];
+  if (task.terminationStatus != 0 || data.length == 0) return @"";
+  NSDictionary *j = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+  if (![j isKindOfClass:[NSDictionary class]]) return @"";
+  NSDictionary *o = j[@"claudeAiOauth"];
+  if (![o isKindOfClass:[NSDictionary class]]) return @"";
+  NSString *t = o[@"accessToken"];
+  return [t isKindOfClass:[NSString class]] ? t : @"";
+}
+
+- (NSString *)oauthToken {
+  NSString *kc = [self oauthTokenFromKeychain];
+  if (kc.length > 0) return kc;
+  NSString *t = [[NSUserDefaults standardUserDefaults] stringForKey:@"claudeOAuthToken"];
+  return [t stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] ?: @"";
+}
+
+- (void)setOAuthTokenFromMenu:(id)sender {
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = @"ตั้งค่า Claude API เรียลไทม์";
+  alert.informativeText = @"แนะนำ: ติดตั้ง Claude Code แล้วรัน  claude auth login  ใน Terminal\nแอปจะอ่าน token สดจาก keychain ให้เองอัตโนมัติ (auto-refresh ไม่หมดอายุ)\n\nหรือถ้าต้องการใส่ token เอง ให้รัน  claude setup-token  แล้ววางด้านล่าง\n(หมายเหตุ: setup-token อาจขาด scope user:profile ทำให้ดู usage ไม่ได้)\n\nเว้นว่าง = ใช้วิธีอ่านจากหน้าเว็บ";
+  NSTextField *field = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 380, 24)];
+  field.placeholderString = @"sk-ant-oat01-…";
+  field.stringValue = [self oauthToken];
+  alert.accessoryView = field;
+  [alert addButtonWithTitle:@"บันทึก"];
+  [alert addButtonWithTitle:@"ยกเลิก"];
+  [NSApp activateIgnoringOtherApps:YES];
+  if ([alert runModal] == NSAlertFirstButtonReturn) {
+    NSString *t = [field.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (t.length > 0) {
+      [[NSUserDefaults standardUserDefaults] setObject:t forKey:@"claudeOAuthToken"];
+    } else {
+      [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"claudeOAuthToken"];
+    }
+    [self readClaudeDesktopUsage];
+  }
+}
+
 - (void)readClaudeDesktopUsage {
+  if ([self fetchUsageViaOAuthToken]) return;
+  [self readClaudeDesktopWebUsage];
+}
+
+- (void)readClaudeDesktopWebUsage {
   if (!self.claudeWebView) {
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     config.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
@@ -307,6 +365,90 @@
            @"weeklyReset": weeklyReset, @"sessionReset": sessionReset};
 }
 
+
+- (NSDate *)dateFromISOString:(id)iso {
+  if (![iso isKindOfClass:[NSString class]] || [iso length] == 0) return nil;
+  NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"\\.\\d+" options:0 error:nil];
+  NSString *clean = [re stringByReplacingMatchesInString:iso options:0 range:NSMakeRange(0, [iso length]) withTemplate:@""];
+  NSISO8601DateFormatter *f = [[NSISO8601DateFormatter alloc] init];
+  return [f dateFromString:clean];
+}
+
+- (NSString *)countdownStringTo:(NSDate *)date {
+  if (!date) return @"";
+  NSTimeInterval s = [date timeIntervalSinceNow];
+  if (s < 0) s = 0;
+  NSInteger h = (NSInteger)(s / 3600);
+  NSInteger m = (NSInteger)((s - h * 3600) / 60);
+  if (h > 0) return [NSString stringWithFormat:@"%ld hr %ld min", (long)h, (long)m];
+  return [NSString stringWithFormat:@"%ld min", (long)m];
+}
+
+- (NSString *)weekdayTimeStringFor:(NSDate *)date {
+  if (!date) return @"";
+  NSDateFormatter *f = [[NSDateFormatter alloc] init];
+  f.locale = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US"];
+  f.dateFormat = @"EEE h:mm a";
+  return [f stringFromDate:date];
+}
+
+// Returns YES if an OAuth token is configured (and this path will handle the read).
+- (BOOL)fetchUsageViaOAuthToken {
+  NSString *token = [self oauthToken];
+  if (token.length == 0) return NO;
+
+  NSURL *url = [NSURL URLWithString:@"https://api.anthropic.com/api/oauth/usage"];
+  NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:20];
+  req.HTTPMethod = @"GET";
+  [req setValue:[@"Bearer " stringByAppendingString:token] forHTTPHeaderField:@"Authorization"];
+  [req setValue:@"oauth-2025-04-20" forHTTPHeaderField:@"anthropic-beta"];
+  [req setValue:@"claude-code/2.0.1 (external, cli)" forHTTPHeaderField:@"User-Agent"];
+  [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+
+  NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+    NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
+    if (error || http.statusCode == 401 || http.statusCode == 403) {
+      // Token missing/expired — tell the user and fall back to the web reader.
+      if (http.statusCode == 401 || http.statusCode == 403) {
+        [self reportClaudeSyncError:@"API token หมดอายุหรือไม่ถูกต้อง รันใหม่: claude setup-token แล้วตั้งค่าใหม่ในเมนู"];
+      }
+      dispatch_async(dispatch_get_main_queue(), ^{ [self readClaudeDesktopWebUsage]; });
+      return;
+    }
+    if (http.statusCode == 429) {
+      [self reportClaudeSyncError:@"API ถูก rate-limit ชั่วคราว จะลองใหม่รอบถัดไป"];
+      return;
+    }
+    NSDictionary *j = [NSJSONSerialization JSONObjectWithData:(data ?: [NSData data]) options:0 error:nil];
+    if (![j isKindOfClass:[NSDictionary class]]) {
+      dispatch_async(dispatch_get_main_queue(), ^{ [self readClaudeDesktopWebUsage]; });
+      return;
+    }
+
+    NSDictionary *five = [j[@"five_hour"] isKindOfClass:[NSDictionary class]] ? j[@"five_hour"] : nil;
+    NSDictionary *seven = [j[@"seven_day"] isKindOfClass:[NSDictionary class]] ? j[@"seven_day"] : nil;
+    double sessionPercent = [five[@"utilization"] doubleValue];
+    double weeklyPercent = [seven[@"utilization"] doubleValue];
+    NSString *sessionReset = [self countdownStringTo:[self dateFromISOString:five[@"resets_at"]]];
+    NSString *weeklyReset = [self weekdayTimeStringFor:[self dateFromISOString:seven[@"resets_at"]]];
+
+    NSDictionary *usage = @{@"sessionPercent": @(sessionPercent),
+                            @"weeklyPercent": @(weeklyPercent),
+                            @"weeklyReset": weeklyReset.length ? weeklyReset : @"",
+                            @"sessionReset": sessionReset.length ? sessionReset : @""};
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:usage options:0 error:nil];
+    NSString *json = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self.claudeLoginWindow orderOut:nil];
+      NSString *script = [NSString stringWithFormat:@"window.applyClaudeAppUsage(%@);", json];
+      [self.webView evaluateJavaScript:script completionHandler:^(id r, NSError *e) {
+        if (!e) [self refreshStatusItem];
+      }];
+    });
+  }];
+  [task resume];
+  return YES;
+}
 
 - (void)fetchClaudeUsageWithAPIKey:(NSString *)apiKey startIso:(NSString *)startIso endIso:(NSString *)endIso {
   NSURLComponents *components = [NSURLComponents componentsWithString:@"https://api.anthropic.com/v1/organizations/usage_report/messages"];
