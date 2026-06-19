@@ -119,7 +119,17 @@
     [self handleClaudeWebViewDidLoad];
     return;
   }
+  // Main webView finished loading — auto-fetch Claude usage
   [self refreshStatusItem];
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+    [self readClaudeDesktopUsage];
+  });
+  // Schedule auto-refresh every 5 minutes
+  [NSTimer scheduledTimerWithTimeInterval:5 * 60
+                                   target:self
+                                 selector:@selector(readClaudeDesktopUsage)
+                                 userInfo:nil
+                                  repeats:YES];
 }
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
@@ -277,14 +287,24 @@
   NSInteger sessionPercent = [[text substringWithRange:[matches[0] rangeAtIndex:1]] integerValue];
   NSInteger weeklyPercent = [[text substringWithRange:[matches[1] rangeAtIndex:1]] integerValue];
   NSString *weeklyReset = @"Fri 12:59 AM";
+  NSString *sessionReset = @"";
 
+  // "Resets in 3 hr 36 min" or "Resets in 45 min" or "Resets in 2 hr"
+  NSRegularExpression *sessionResetRegex = [NSRegularExpression regularExpressionWithPattern:@"Resets in (\\d+(?:\\s+hr(?:\\s+\\d+\\s+min)?)?(?:\\s*\\d+\\s+min)?)" options:0 error:nil];
+  NSTextCheckingResult *sessionResetMatch = [sessionResetRegex firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
+  if (sessionResetMatch && sessionResetMatch.numberOfRanges > 1) {
+    sessionReset = [[text substringWithRange:[sessionResetMatch rangeAtIndex:1]] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+  }
+
+  // "Resets Fri 12:59 AM"
   NSRegularExpression *resetRegex = [NSRegularExpression regularExpressionWithPattern:@"Resets\\s+([A-Za-z]{3}\\s+\\d{1,2}:\\d{2}\\s+[AP]M)" options:0 error:nil];
   NSTextCheckingResult *resetMatch = [resetRegex firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
   if (resetMatch && resetMatch.numberOfRanges > 1) {
     weeklyReset = [text substringWithRange:[resetMatch rangeAtIndex:1]];
   }
 
-  return @{@"sessionPercent": @(sessionPercent), @"weeklyPercent": @(weeklyPercent), @"weeklyReset": weeklyReset};
+  return @{@"sessionPercent": @(sessionPercent), @"weeklyPercent": @(weeklyPercent),
+           @"weeklyReset": weeklyReset, @"sessionReset": sessionReset};
 }
 
 
@@ -368,9 +388,10 @@
     dispatch_async(dispatch_get_main_queue(), ^{
       [self updateStatusIconWithDailyPercent:dailyPercent weeklyPercent:weeklyPercent];
       [self updateDockIconWithDailyPercent:dailyPercent weeklyPercent:weeklyPercent];
-      self.statusItem.button.toolTip = [NSString stringWithFormat:@"Daily %.1f%% · reset %@\nWeekly %.1f%% · reset %@",
+      NSString *sessionResetDisplay = (dailyReset.length > 0 && [dailyReset rangeOfCharacterFromSet:[NSCharacterSet letterCharacterSet]].location != NSNotFound && ![dailyReset containsString:@"/"]) ? [@"in " stringByAppendingString:dailyReset] : dailyReset;
+      self.statusItem.button.toolTip = [NSString stringWithFormat:@"Session %.1f%% · resets %@\nWeekly %.1f%% · resets %@",
                                         dailyPercent,
-                                        dailyReset,
+                                        sessionResetDisplay,
                                         weeklyPercent,
                                         weeklyReset];
     });
@@ -440,8 +461,8 @@
   NSFont *font = [NSFont monospacedSystemFontOfSize:5.0 weight:NSFontWeightMedium];
   NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] init];
 
-  for (NSString *label in @[@"D", @"W"]) {
-    NSInteger blocks = [label isEqualToString:@"D"] ? dailyBlocks : weeklyBlocks;
+  for (NSString *label in @[@"S", @"W"]) {
+    NSInteger blocks = [label isEqualToString:@"S"] ? dailyBlocks : weeklyBlocks;
     NSMutableAttributedString *line = [[NSMutableAttributedString alloc] init];
     [line appendAttributedString:[[NSAttributedString alloc] initWithString:[label stringByAppendingString:@" "]
       attributes:@{NSFontAttributeName: font}]];
@@ -450,7 +471,7 @@
       [line appendAttributedString:[[NSAttributedString alloc] initWithString:ch
         attributes:@{NSFontAttributeName: font}]];
     }
-    if ([label isEqualToString:@"D"]) {
+    if ([label isEqualToString:@"S"]) {
       [line appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n"
         attributes:@{NSFontAttributeName: font}]];
     }
@@ -469,7 +490,7 @@
   NSColor *emptyColor = [NSColor tertiaryLabelColor];
   NSDictionary *labelAttrs = @{NSFontAttributeName: font, NSForegroundColorAttributeName: solidColor};
 
-  NSAttributedString *dLabel = [[NSAttributedString alloc] initWithString:@"D " attributes:labelAttrs];
+  NSAttributedString *dLabel = [[NSAttributedString alloc] initWithString:@"S " attributes:labelAttrs];
   NSAttributedString *wLabel = [[NSAttributedString alloc] initWithString:@"W " attributes:labelAttrs];
 
   NSMutableAttributedString *dailyLine = [[NSMutableAttributedString alloc] initWithAttributedString:dLabel];

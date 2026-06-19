@@ -208,7 +208,7 @@ function renderUsage() {
     weeklyTokens,
     dailyLimit: settings.dailyLimit,
     weeklyLimit: settings.weeklyLimit,
-    nextDailyReset: nextDailyReset.toLocaleString(),
+    nextDailyReset: mirror.enabled && mirror.sessionReset ? mirror.sessionReset : nextDailyReset.toLocaleString(),
     nextWeeklyReset: mirror.enabled ? mirror.weeklyReset : nextWeeklyReset.toLocaleString(),
   };
 }
@@ -305,6 +305,7 @@ function applyClaudeAppUsage(usage) {
     sessionPercent: Number(usage.sessionPercent) || 0,
     weeklyPercent: Number(usage.weeklyPercent) || 0,
     weeklyReset: usage.weeklyReset || mirror.weeklyReset || "Fri 12:59 AM",
+    sessionReset: usage.sessionReset || "",
     updatedAt: new Date().toISOString(),
   };
 
