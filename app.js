@@ -37,7 +37,6 @@ const sessionPercent = document.querySelector("#sessionPercent");
 const sessionResetText = document.querySelector("#sessionResetText");
 const weeklyPercentLabel = document.querySelector("#weeklyPercentLabel");
 const weeklyResetLabel = document.querySelector("#weeklyResetLabel");
-const closeButton = document.querySelector("#closeButton");
 const manualSessionPercent = document.querySelector("#manualSessionPercent");
 const manualWeeklyPercent = document.querySelector("#manualWeeklyPercent");
 const manualWeeklyReset = document.querySelector("#manualWeeklyReset");
@@ -482,14 +481,6 @@ syncClaudeButton.addEventListener("click", syncClaudeUsage);
     render();
   });
 });
-closeButton.addEventListener("click", () => {
-  if (window.webkit?.messageHandlers?.closeWindow) {
-    window.webkit.messageHandlers.closeWindow.postMessage({});
-    return;
-  }
-  window.close();
-});
-
 [dailyLimit, weeklyLimit, dailyReset, weeklyResetDay].forEach((input) => {
   input.addEventListener("input", () => {
     saveSettings();
