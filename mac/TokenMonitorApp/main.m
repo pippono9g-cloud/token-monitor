@@ -713,7 +713,6 @@
 
     dispatch_async(dispatch_get_main_queue(), ^{
       [self updateStatusIconWithDailyPercent:dailyPercent weeklyPercent:weeklyPercent];
-      [self updateDockIconWithDailyPercent:dailyPercent weeklyPercent:weeklyPercent];
       NSString *sessionResetDisplay = (dailyReset.length > 0 && [dailyReset rangeOfCharacterFromSet:[NSCharacterSet letterCharacterSet]].location != NSNotFound && ![dailyReset containsString:@"/"]) ? [@"in " stringByAppendingString:dailyReset] : dailyReset;
       self.statusItem.button.toolTip = [NSString stringWithFormat:@"Session %.1f%% · resets %@\nWeekly %.1f%% · resets %@",
                                         dailyPercent,
@@ -855,7 +854,8 @@ int main(int argc, const char *argv[]) {
     NSApplication *app = [NSApplication sharedApplication];
     AppDelegate *delegate = [[AppDelegate alloc] init];
     [app setDelegate:delegate];
-    [app setActivationPolicy:NSApplicationActivationPolicyRegular];
+    // Menu-bar utility: live in the status bar only, not the Dock or Cmd-Tab.
+    [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
     [app run];
   }
   return 0;
