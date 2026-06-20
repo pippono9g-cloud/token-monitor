@@ -35,6 +35,9 @@
                                             styleMask:style
                                               backing:NSBackingStoreBuffered
                                                 defer:NO];
+  // Keep the strong reference valid after the window's close (red) button is used,
+  // otherwise NSWindow deallocates itself and toggleWindow: crashes on a dangling pointer.
+  self.window.releasedWhenClosed = NO;
   [self.window center];
   [self.window setTitle:@"Token Monitor"];
   [self.window setMinSize:NSMakeSize(280, 180)];
@@ -386,6 +389,7 @@
                                                          styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                            backing:NSBackingStoreBuffered
                                                              defer:NO];
+    self.claudeLoginWindow.releasedWhenClosed = NO;
     [self.claudeLoginWindow setTitle:@"Log in to Claude"];
     [self.claudeLoginWindow setContentView:self.claudeWebView];
     [self.claudeLoginWindow center];
