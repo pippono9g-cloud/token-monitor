@@ -9,6 +9,7 @@
 @property(nonatomic, strong) WKWebView *claudeWebView;
 @property(nonatomic, strong) NSWindow *claudeLoginWindow;
 @property(nonatomic, assign) BOOL claudeWebViewPendingRead;
+@property(nonatomic, assign) BOOL apiRealtimeConnected;
 @end
 
 @implementation AppDelegate
@@ -95,8 +96,19 @@
   [menu addItemWithTitle:@"Open Token Monitor" action:@selector(openWindowFromMenu:) keyEquivalent:@""];
   [menu addItemWithTitle:@"Refresh" action:@selector(refreshFromMenu:) keyEquivalent:@"r"];
   [menu addItem:[NSMenuItem separatorItem]];
-  NSString *tokenTitle = [self oauthToken].length > 0 ? @"API: เรียลไทม์ ✓ (เชื่อม Claude Code)" : @"ตั้งค่า API เรียลไทม์…";
-  [menu addItemWithTitle:tokenTitle action:@selector(setOAuthTokenFromMenu:) keyEquivalent:@""];
+  NSMenuItem *apiItem = [menu addItemWithTitle:@"" action:@selector(setOAuthTokenFromMenu:) keyEquivalent:@""];
+  NSColor *dotColor = self.apiRealtimeConnected ? [NSColor systemGreenColor] : [NSColor systemRedColor];
+  NSString *apiLabel = self.apiRealtimeConnected ? @"Claude API: Connected" : @"Claude API: Web mode";
+  CGFloat menuFontSize = [NSFont systemFontSize];
+  NSFont *menuFont = [NSFont menuFontOfSize:0];
+  // Text first (left-aligned with the rest of the menu), small colored dot after it.
+  NSMutableAttributedString *apiAttr = [[NSMutableAttributedString alloc] initWithString:apiLabel
+      attributes:@{NSFontAttributeName: menuFont}];
+  [apiAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@"  ●"
+      attributes:@{NSFontAttributeName: [NSFont systemFontOfSize:menuFontSize * 0.6],
+                   NSForegroundColorAttributeName: dotColor,
+                   NSBaselineOffsetAttributeName: @(menuFontSize * 0.15)}]];
+  apiItem.attributedTitle = apiAttr;
   [menu addItem:[NSMenuItem separatorItem]];
   [menu addItemWithTitle:@"Quit" action:@selector(quitFromMenu:) keyEquivalent:@"q"];
   self.statusItem.menu = menu;
@@ -165,9 +177,8 @@
   [self fetchClaudeUsageWithAPIKey:apiKey startIso:startIso endIso:endIso];
 }
 
-// Reads the claudeAiOauth credentials dict Claude Code keeps in the login keychain.
-// This token carries the user:profile scope the usage endpoint requires (unlike setup-token).
-- (NSDictionary *)claudeCredentials {
+// Reads the full credentials blob Claude Code keeps in the login keychain (includes claudeAiOauth).
+- (NSDictionary *)keychainBlob {
   NSTask *task = [[NSTask alloc] init];
   task.launchPath = @"/usr/bin/security";
   task.arguments = @[@"find-generic-password", @"-s", @"Claude Code-credentials", @"-w"];
@@ -179,8 +190,12 @@
   [task waitUntilExit];
   if (task.terminationStatus != 0 || data.length == 0) return nil;
   NSDictionary *j = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-  if (![j isKindOfClass:[NSDictionary class]]) return nil;
-  NSDictionary *o = j[@"claudeAiOauth"];
+  return [j isKindOfClass:[NSDictionary class]] ? j : nil;
+}
+
+// The claudeAiOauth sub-dict. Token carries the user:profile scope the usage endpoint needs.
+- (NSDictionary *)claudeCredentials {
+  NSDictionary *o = [self keychainBlob][@"claudeAiOauth"];
   return [o isKindOfClass:[NSDictionary class]] ? o : nil;
 }
 
@@ -189,39 +204,70 @@
   return [t isKindOfClass:[NSString class]] ? t : @"";
 }
 
-- (NSString *)claudeBinaryPath {
-  NSArray *cands = @[[NSHomeDirectory() stringByAppendingPathComponent:@".local/bin/claude"],
-                     @"/opt/homebrew/bin/claude", @"/usr/local/bin/claude", @"/usr/bin/claude"];
-  for (NSString *p in cands) {
-    if ([[NSFileManager defaultManager] isExecutableFileAtPath:p]) return p;
-  }
-  return nil;
+// Refreshes the access token via the OAuth refresh-token grant, then writes the rotated
+// credentials back to the keychain so Claude Code keeps working with the same token.
+// Returns the new access token, or @"" on failure. Background-only (blocks).
+- (NSString *)refreshAccessTokenWritingBack {
+  NSMutableDictionary *blob = [[self keychainBlob] mutableCopy];
+  NSMutableDictionary *oauth = [blob[@"claudeAiOauth"] mutableCopy];
+  NSString *rt = oauth[@"refreshToken"];
+  if (![rt isKindOfClass:[NSString class]] || rt.length == 0) return @"";
+
+  NSDictionary *payload = @{@"grant_type": @"refresh_token",
+                            @"refresh_token": rt,
+                            @"client_id": @"9d1c250a-e61b-44d9-88ed-5944d1962f5e"};
+  NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:@"https://platform.claude.com/v1/oauth/token"]
+                                                    cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                timeoutInterval:20];
+  req.HTTPMethod = @"POST";
+  [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+  [req setValue:@"claude-code/2.0.1 (external, cli)" forHTTPHeaderField:@"User-Agent"];
+  req.HTTPBody = [NSJSONSerialization dataWithJSONObject:payload options:0 error:nil];
+
+  __block NSData *respData = nil;
+  __block NSInteger code = 0;
+  dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+  [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+    respData = d;
+    code = [r isKindOfClass:[NSHTTPURLResponse class]] ? ((NSHTTPURLResponse *)r).statusCode : 0;
+    dispatch_semaphore_signal(sem);
+  }] resume];
+  dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(25 * NSEC_PER_SEC)));
+
+  if (code != 200 || respData.length == 0) return @"";
+  NSDictionary *data = [NSJSONSerialization JSONObjectWithData:respData options:0 error:nil];
+  NSString *at = data[@"access_token"];
+  if (![at isKindOfClass:[NSString class]] || at.length == 0) return @"";
+
+  oauth[@"accessToken"] = at;
+  if ([data[@"refresh_token"] isKindOfClass:[NSString class]]) oauth[@"refreshToken"] = data[@"refresh_token"];
+  double expiresIn = [data[@"expires_in"] doubleValue];
+  if (expiresIn <= 0) expiresIn = 3600;
+  oauth[@"expiresAt"] = @((long long)(([[NSDate date] timeIntervalSince1970] + expiresIn) * 1000.0));
+  blob[@"claudeAiOauth"] = oauth;
+
+  NSData *blobData = [NSJSONSerialization dataWithJSONObject:blob options:0 error:nil];
+  NSString *blobStr = [[NSString alloc] initWithData:blobData encoding:NSUTF8StringEncoding];
+  NSTask *write = [[NSTask alloc] init];
+  write.launchPath = @"/usr/bin/security";
+  write.arguments = @[@"add-generic-password", @"-U", @"-s", @"Claude Code-credentials",
+                      @"-a", NSUserName(), @"-w", blobStr];
+  write.standardOutput = [NSPipe pipe];
+  write.standardError = [NSPipe pipe];
+  @try { [write launch]; [write waitUntilExit]; } @catch (NSException *e) {}
+  return at;
 }
 
-// Runs `claude auth status` so Claude Code refreshes the keychain token if it has expired.
-// Non-interactive and cheap (no model usage). Must be called off the main thread.
-- (void)triggerClaudeRefresh {
-  NSString *bin = [self claudeBinaryPath];
-  if (!bin) return;
-  NSTask *task = [[NSTask alloc] init];
-  task.launchPath = bin;
-  task.arguments = @[@"auth", @"status"];
-  task.standardOutput = [NSPipe pipe];
-  task.standardError = [NSPipe pipe];
-  @try { [task launch]; } @catch (NSException *e) { return; }
-  @try { [task waitUntilExit]; } @catch (NSException *e) { return; }
-}
-
-// Background-only: returns a fresh access token, proactively refreshing via Claude Code
-// when the keychain token is within 5 minutes of expiry. Falls back to a pasted token.
+// Background-only: returns a fresh access token, refreshing (and writing back to the keychain)
+// when the token is within 5 minutes of expiry. Falls back to a pasted token.
 - (NSString *)freshOAuthToken {
   NSDictionary *creds = [self claudeCredentials];
   if (creds) {
     double expMs = [creds[@"expiresAt"] doubleValue];
     double nowMs = [[NSDate date] timeIntervalSince1970] * 1000.0;
     if (expMs > 0 && (expMs - nowMs) < 5 * 60 * 1000) {
-      [self triggerClaudeRefresh];
-      creds = [self claudeCredentials] ?: creds;
+      NSString *refreshed = [self refreshAccessTokenWritingBack];
+      if (refreshed.length > 0) return refreshed;
     }
     NSString *t = creds[@"accessToken"];
     if ([t isKindOfClass:[NSString class]] && [t length] > 0) return t;
@@ -273,6 +319,7 @@
 }
 
 - (void)readClaudeDesktopWebUsage {
+  self.apiRealtimeConnected = NO;
   if (!self.claudeWebView) {
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     config.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
@@ -445,6 +492,10 @@
 }
 
 - (void)fetchUsageWithToken:(NSString *)token {
+  [self fetchUsageWithToken:token allowRefresh:YES];
+}
+
+- (void)fetchUsageWithToken:(NSString *)token allowRefresh:(BOOL)allowRefresh {
   NSURL *url = [NSURL URLWithString:@"https://api.anthropic.com/api/oauth/usage"];
   NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:20];
   req.HTTPMethod = @"GET";
@@ -456,9 +507,17 @@
   NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
     NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
     if (error || http.statusCode == 401 || http.statusCode == 403) {
-      // Token missing/expired — tell the user and fall back to the web reader.
-      if (http.statusCode == 401 || http.statusCode == 403) {
-        [self reportClaudeSyncError:@"API token หมดอายุหรือไม่ถูกต้อง รันใหม่: claude setup-token แล้วตั้งค่าใหม่ในเมนู"];
+      // 401/403 = token rejected. Try one refresh+retry before falling back to the web reader.
+      if ((http.statusCode == 401 || http.statusCode == 403) && allowRefresh) {
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+          NSString *refreshed = [self refreshAccessTokenWritingBack];
+          if (refreshed.length > 0) {
+            [self fetchUsageWithToken:refreshed allowRefresh:NO];
+          } else {
+            dispatch_async(dispatch_get_main_queue(), ^{ [self readClaudeDesktopWebUsage]; });
+          }
+        });
+        return;
       }
       dispatch_async(dispatch_get_main_queue(), ^{ [self readClaudeDesktopWebUsage]; });
       return;
@@ -487,6 +546,7 @@
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:usage options:0 error:nil];
     NSString *json = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
     dispatch_async(dispatch_get_main_queue(), ^{
+      self.apiRealtimeConnected = YES;
       [self.claudeLoginWindow orderOut:nil];
       NSString *script = [NSString stringWithFormat:@"window.applyClaudeAppUsage(%@);", json];
       [self.webView evaluateJavaScript:script completionHandler:^(id r, NSError *e) {
