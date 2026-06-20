@@ -113,6 +113,11 @@
                    NSBaselineOffsetAttributeName: @(menuFontSize * 0.15)}]];
   apiItem.attributedTitle = apiAttr;
   [menu addItem:[NSMenuItem separatorItem]];
+  NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"?";
+  [menu addItemWithTitle:[NSString stringWithFormat:@"About Token Monitor (v%@)", version]
+                  action:@selector(showAboutFromMenu:) keyEquivalent:@""];
+  [menu addItemWithTitle:@"Check for Updates…" action:@selector(checkForUpdatesFromMenu:) keyEquivalent:@""];
+  [menu addItem:[NSMenuItem separatorItem]];
   [menu addItemWithTitle:@"Quit" action:@selector(quitFromMenu:) keyEquivalent:@"q"];
   self.statusItem.menu = menu;
   [self.statusItem.button performClick:nil];
@@ -126,6 +131,74 @@
 
 - (void)refreshFromMenu:(id)sender {
   [self readClaudeDesktopUsage];
+}
+
+- (NSString *)appVersion {
+  return [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"?";
+}
+
+- (void)showAboutFromMenu:(id)sender {
+  NSAlert *alert = [[NSAlert alloc] init];
+  alert.messageText = @"Token Monitor";
+  alert.informativeText = [NSString stringWithFormat:@"เวอร์ชัน %@\n\nแสดงการใช้งาน Claude (session + weekly) บน menu bar แบบเรียลไทม์\n\nhttps://github.com/pippono9g-cloud/token-monitor", [self appVersion]];
+  if (alert.icon == nil) alert.icon = [NSApp applicationIconImage];
+  [alert addButtonWithTitle:@"OK"];
+  [alert addButtonWithTitle:@"เปิดหน้า GitHub"];
+  [NSApp activateIgnoringOtherApps:YES];
+  if ([alert runModal] == NSAlertSecondButtonReturn) {
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/pippono9g-cloud/token-monitor"]];
+  }
+}
+
+- (void)checkForUpdatesFromMenu:(id)sender {
+  NSURL *url = [NSURL URLWithString:@"https://api.github.com/repos/pippono9g-cloud/token-monitor/releases/latest"];
+  NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:15];
+  [req setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
+  [req setValue:@"TokenMonitor" forHTTPHeaderField:@"User-Agent"];
+  NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+    NSString *latest = nil;
+    if (data) {
+      NSDictionary *j = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+      if ([j isKindOfClass:[NSDictionary class]] && [j[@"tag_name"] isKindOfClass:[NSString class]]) {
+        latest = [j[@"tag_name"] hasPrefix:@"v"] ? [j[@"tag_name"] substringFromIndex:1] : j[@"tag_name"];
+      }
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [self presentUpdateResult:latest];
+    });
+  }];
+  [task resume];
+}
+
+// Compares dotted numeric versions. Returns YES if `latest` is newer than the running app.
+- (BOOL)version:(NSString *)latest isNewerThan:(NSString *)current {
+  return [latest compare:current options:NSNumericSearch] == NSOrderedDescending;
+}
+
+- (void)presentUpdateResult:(NSString *)latest {
+  NSAlert *alert = [[NSAlert alloc] init];
+  [NSApp activateIgnoringOtherApps:YES];
+  if (latest.length == 0) {
+    alert.messageText = @"เช็กอัปเดตไม่สำเร็จ";
+    alert.informativeText = @"เชื่อมต่อ GitHub ไม่ได้ ลองใหม่อีกครั้งภายหลัง";
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+    return;
+  }
+  if ([self version:latest isNewerThan:[self appVersion]]) {
+    alert.messageText = [NSString stringWithFormat:@"มีเวอร์ชันใหม่: v%@", latest];
+    alert.informativeText = [NSString stringWithFormat:@"คุณกำลังใช้ v%@\nเปิดหน้าดาวน์โหลดเลยไหม?", [self appVersion]];
+    [alert addButtonWithTitle:@"เปิดหน้าดาวน์โหลด"];
+    [alert addButtonWithTitle:@"ภายหลัง"];
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+      [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://github.com/pippono9g-cloud/token-monitor/releases/latest"]];
+    }
+  } else {
+    alert.messageText = @"เป็นเวอร์ชันล่าสุดแล้ว";
+    alert.informativeText = [NSString stringWithFormat:@"v%@ เป็นเวอร์ชันใหม่ที่สุด", [self appVersion]];
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+  }
 }
 
 - (void)quitFromMenu:(id)sender {
