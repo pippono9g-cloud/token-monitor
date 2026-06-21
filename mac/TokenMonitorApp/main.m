@@ -1,8 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
 
-@interface AppDelegate : NSObject <NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler>
-@property(nonatomic, strong) NSWindow *window;
+@interface AppDelegate : NSObject <NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler, NSMenuDelegate>
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) NSStatusItem *statusItem;
 @property(nonatomic, strong) NSTimer *statusTimer;
@@ -10,6 +9,11 @@
 @property(nonatomic, strong) NSWindow *claudeLoginWindow;
 @property(nonatomic, assign) BOOL claudeWebViewPendingRead;
 @property(nonatomic, assign) BOOL apiRealtimeConnected;
+@property(nonatomic, assign) BOOL hasUsage;
+@property(nonatomic, assign) double sessionPercent;
+@property(nonatomic, assign) double weeklyPercent;
+@property(nonatomic, copy) NSString *sessionResetText;
+@property(nonatomic, copy) NSString *weeklyResetText;
 @end
 
 @implementation AppDelegate
@@ -22,27 +26,10 @@
   [contentController addScriptMessageHandler:self name:@"closeWindow"];
   configuration.userContentController = contentController;
 
-  self.webView = [[WKWebView alloc] initWithFrame:NSZeroRect configuration:configuration];
+  // Headless data layer: the webView runs app.js (mirror state + status calc)
+  // but is never shown in a window. The UI lives entirely in the status-bar menu.
+  self.webView = [[WKWebView alloc] initWithFrame:NSMakeRect(0, 0, 327, 220) configuration:configuration];
   self.webView.navigationDelegate = self;
-
-  NSRect frame = NSMakeRect(0, 0, 327, 220);
-  NSWindowStyleMask style = NSWindowStyleMaskTitled |
-                            NSWindowStyleMaskClosable |
-                            NSWindowStyleMaskMiniaturizable |
-                            NSWindowStyleMaskResizable;
-
-  self.window = [[NSWindow alloc] initWithContentRect:frame
-                                            styleMask:style
-                                              backing:NSBackingStoreBuffered
-                                                defer:NO];
-  // Keep the strong reference valid after the window's close (red) button is used,
-  // otherwise NSWindow deallocates itself and toggleWindow: crashes on a dangling pointer.
-  self.window.releasedWhenClosed = NO;
-  [self.window center];
-  [self.window setTitle:@"Token Monitor"];
-  [self.window setMinSize:NSMakeSize(280, 180)];
-  [self.window setContentView:self.webView];
-  [self.window orderOut:nil];
 
   [self setupStatusItem];
 
@@ -66,9 +53,12 @@
   self.statusItem.button.imagePosition = NSNoImage;
   [self updateStatusIconWithDailyPercent:0 weeklyPercent:0];
   self.statusItem.button.toolTip = @"Token Monitor";
-  self.statusItem.button.target = self;
-  self.statusItem.button.action = @selector(toggleWindow:);
-  [self.statusItem.button sendActionOn:NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp];
+
+  // Permanent menu → opens on both left- and right-click. Rebuilt on each open so
+  // the Usage section always shows current values.
+  NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Token Monitor"];
+  menu.delegate = self;
+  self.statusItem.menu = menu;
 
   self.statusTimer = [NSTimer scheduledTimerWithTimeInterval:5.0
                                                       target:self
@@ -77,56 +67,47 @@
                                                      repeats:YES];
 }
 
-- (void)toggleWindow:(id)sender {
-  NSEvent *event = [NSApp currentEvent];
-  if (event.type == NSEventTypeRightMouseUp) {
-    [self showMenu];
-    return;
+// Rebuild the menu contents right before it opens (NSMenuDelegate).
+- (void)menuNeedsUpdate:(NSMenu *)menu {
+  [menu removeAllItems];
+
+  // ── Usage section ──
+  NSMenuItem *usageHeader = [menu addItemWithTitle:@"Usage" action:nil keyEquivalent:@""];
+  usageHeader.enabled = NO;
+  if (self.hasUsage) {
+    NSString *s = [NSString stringWithFormat:@"5h  %.0f%%   ·  resets %@", self.sessionPercent,
+                   self.sessionResetText.length ? self.sessionResetText : @"—"];
+    NSString *w = [NSString stringWithFormat:@"Weekly  %.0f%%   ·  resets %@", self.weeklyPercent,
+                   self.weeklyResetText.length ? self.weeklyResetText : @"—"];
+    [menu addItemWithTitle:s action:nil keyEquivalent:@""].enabled = NO;
+    [menu addItemWithTitle:w action:nil keyEquivalent:@""].enabled = NO;
+  } else {
+    [menu addItemWithTitle:@"กำลังโหลด…" action:nil keyEquivalent:@""].enabled = NO;
   }
 
-  if (self.window.isVisible) {
-    [self.window orderOut:nil];
-    return;
-  }
-
-  [NSApp activateIgnoringOtherApps:YES];
-  [self.window makeKeyAndOrderFront:nil];
-  [self refreshStatusItem];
-}
-
-- (void)showMenu {
-  NSMenu *menu = [[NSMenu alloc] initWithTitle:@"Token Monitor"];
-  [menu addItemWithTitle:@"Open Token Monitor" action:@selector(openWindowFromMenu:) keyEquivalent:@""];
-  [menu addItemWithTitle:@"Refresh" action:@selector(refreshFromMenu:) keyEquivalent:@"r"];
   [menu addItem:[NSMenuItem separatorItem]];
+
+  // ── Connection status (small colored dot) ──
   NSMenuItem *apiItem = [menu addItemWithTitle:@"" action:@selector(setOAuthTokenFromMenu:) keyEquivalent:@""];
   NSColor *dotColor = self.apiRealtimeConnected ? [NSColor systemGreenColor] : [NSColor systemRedColor];
   NSString *apiLabel = self.apiRealtimeConnected ? @"Claude API: Connected" : @"Claude API: Web mode";
   CGFloat menuFontSize = [NSFont systemFontSize];
-  NSFont *menuFont = [NSFont menuFontOfSize:0];
-  // Text first (left-aligned with the rest of the menu), small colored dot after it.
   NSMutableAttributedString *apiAttr = [[NSMutableAttributedString alloc] initWithString:apiLabel
-      attributes:@{NSFontAttributeName: menuFont}];
+      attributes:@{NSFontAttributeName: [NSFont menuFontOfSize:0]}];
   [apiAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@"  ●"
       attributes:@{NSFontAttributeName: [NSFont systemFontOfSize:menuFontSize * 0.6],
                    NSForegroundColorAttributeName: dotColor,
                    NSBaselineOffsetAttributeName: @(menuFontSize * 0.15)}]];
   apiItem.attributedTitle = apiAttr;
+
+  [menu addItemWithTitle:@"Refresh" action:@selector(refreshFromMenu:) keyEquivalent:@"r"];
+
   [menu addItem:[NSMenuItem separatorItem]];
-  NSString *version = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"?";
-  [menu addItemWithTitle:[NSString stringWithFormat:@"About Token Monitor (v%@)", version]
+  [menu addItemWithTitle:[NSString stringWithFormat:@"About Token Monitor (v%@)", [self appVersion]]
                   action:@selector(showAboutFromMenu:) keyEquivalent:@""];
   [menu addItemWithTitle:@"Check for Updates…" action:@selector(checkForUpdatesFromMenu:) keyEquivalent:@""];
   [menu addItem:[NSMenuItem separatorItem]];
   [menu addItemWithTitle:@"Quit" action:@selector(quitFromMenu:) keyEquivalent:@"q"];
-  self.statusItem.menu = menu;
-  [self.statusItem.button performClick:nil];
-  self.statusItem.menu = nil;
-}
-
-- (void)openWindowFromMenu:(id)sender {
-  [NSApp activateIgnoringOtherApps:YES];
-  [self.window makeKeyAndOrderFront:nil];
 }
 
 - (void)refreshFromMenu:(id)sender {
@@ -215,8 +196,8 @@
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
     [self readClaudeDesktopUsage];
   });
-  // Schedule auto-refresh every 5 minutes
-  [NSTimer scheduledTimerWithTimeInterval:5 * 60
+  // Schedule auto-refresh every 3 minutes (the safe floor for the usage endpoint)
+  [NSTimer scheduledTimerWithTimeInterval:3 * 60
                                    target:self
                                  selector:@selector(readClaudeDesktopUsage)
                                  userInfo:nil
@@ -714,6 +695,12 @@
     dispatch_async(dispatch_get_main_queue(), ^{
       [self updateStatusIconWithDailyPercent:dailyPercent weeklyPercent:weeklyPercent];
       NSString *sessionResetDisplay = (dailyReset.length > 0 && [dailyReset rangeOfCharacterFromSet:[NSCharacterSet letterCharacterSet]].location != NSNotFound && ![dailyReset containsString:@"/"]) ? [@"in " stringByAppendingString:dailyReset] : dailyReset;
+      // Cache for the in-menu Usage section.
+      self.hasUsage = YES;
+      self.sessionPercent = dailyPercent;
+      self.weeklyPercent = weeklyPercent;
+      self.sessionResetText = sessionResetDisplay;
+      self.weeklyResetText = weeklyReset;
       self.statusItem.button.toolTip = [NSString stringWithFormat:@"Session %.1f%% · resets %@\nWeekly %.1f%% · resets %@",
                                         dailyPercent,
                                         sessionResetDisplay,
