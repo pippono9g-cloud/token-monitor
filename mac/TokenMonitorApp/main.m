@@ -767,30 +767,57 @@
 }
 
 - (void)updateStatusIconWithDailyPercent:(double)dailyPercent weeklyPercent:(double)weeklyPercent {
-  NSInteger dailyBlocks = (NSInteger)round(fmin(100.0, fmax(0.0, dailyPercent)) / 10.0);
-  NSInteger weeklyBlocks = (NSInteger)round(fmin(100.0, fmax(0.0, weeklyPercent)) / 10.0);
+  NSInteger s = (NSInteger)round(fmin(100.0, fmax(0.0, dailyPercent)));
+  NSInteger w = (NSInteger)round(fmin(100.0, fmax(0.0, weeklyPercent)));
+  NSString *lbl1 = @"S", *lbl2 = @"W";
+  NSString *val1 = [NSString stringWithFormat:@"%ld%%", (long)s];
+  NSString *val2 = [NSString stringWithFormat:@"%ld%%", (long)w];
 
-  NSFont *font = [NSFont monospacedSystemFontOfSize:5.0 weight:NSFontWeightMedium];
-  NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] init];
+  NSFont *font = [NSFont monospacedDigitSystemFontOfSize:6.5 weight:NSFontWeightSemibold];
+  NSDictionary *attrs = @{NSFontAttributeName: font, NSForegroundColorAttributeName: [NSColor blackColor]};
+  NSSize lblSz1 = [lbl1 sizeWithAttributes:attrs], lblSz2 = [lbl2 sizeWithAttributes:attrs];
+  NSSize valSz1 = [val1 sizeWithAttributes:attrs], valSz2 = [val2 sizeWithAttributes:attrs];
+  CGFloat lblW = fmax(lblSz1.width, lblSz2.width);
+  CGFloat valW = fmax(valSz1.width, valSz2.width);
+  CGFloat lineH = fmax(lblSz1.height, lblSz2.height);
 
-  for (NSString *label in @[@"S", @"W"]) {
-    NSInteger blocks = [label isEqualToString:@"S"] ? dailyBlocks : weeklyBlocks;
-    NSMutableAttributedString *line = [[NSMutableAttributedString alloc] init];
-    [line appendAttributedString:[[NSAttributedString alloc] initWithString:[label stringByAppendingString:@" "]
-      attributes:@{NSFontAttributeName: font}]];
-    for (NSInteger i = 0; i < 10; i++) {
-      NSString *ch = (i < blocks) ? @"█" : @"░";
-      [line appendAttributedString:[[NSAttributedString alloc] initWithString:ch
-        attributes:@{NSFontAttributeName: font}]];
-    }
-    if ([label isEqualToString:@"S"]) {
-      [line appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n"
-        attributes:@{NSFontAttributeName: font}]];
-    }
-    [attr appendAttributedString:line];
-  }
+  CGFloat padX = 1.0, padTop = 1.5, padBottom = 0.5, gap = 2.0, dividerW = 1.0;
+  CGFloat imgW = ceil(padX + lblW + gap + dividerW + gap + valW + padX);
+  CGFloat imgH = ceil(lineH * 2 + padTop + padBottom);
 
-  self.statusItem.button.attributedTitle = attr;
+  NSImage *img = [[NSImage alloc] initWithSize:NSMakeSize(imgW, imgH)];
+  [img lockFocus];
+
+  CGFloat topY = imgH - padTop - lineH;     // baseline-origin of the top line
+  CGFloat botY = padBottom;                  // baseline-origin of the bottom line
+  CGFloat valX = padX + lblW + gap + dividerW + gap;
+
+  // Labels (left column) and values (right column), each line aligned
+  [lbl1 drawAtPoint:NSMakePoint(padX, topY) withAttributes:attrs];
+  [lbl2 drawAtPoint:NSMakePoint(padX, botY) withAttributes:attrs];
+  [val1 drawAtPoint:NSMakePoint(valX, topY) withAttributes:attrs];
+  [val2 drawAtPoint:NSMakePoint(valX, botY) withAttributes:attrs];
+
+  // One continuous vertical divider matching the glyph extents:
+  // from the baseline of the bottom line up to the cap-top of the top line.
+  CGFloat descent = -font.descender;          // distance from line-box bottom up to baseline
+  CGFloat capHeight = font.capHeight;
+  CGFloat dividerBottom = botY + descent;     // baseline of "W"/value row (digits sit here)
+  CGFloat dividerTop = topY + descent + capHeight + 1.0;  // cap-top of "S"/value row (+ small nudge)
+  CGFloat divX = padX + lblW + gap + dividerW / 2.0;
+  NSBezierPath *divider = [NSBezierPath bezierPath];
+  divider.lineWidth = dividerW;
+  [[NSColor blackColor] setStroke];
+  [divider moveToPoint:NSMakePoint(divX, dividerBottom)];
+  [divider lineToPoint:NSMakePoint(divX, dividerTop)];
+  [divider stroke];
+
+  [img unlockFocus];
+  img.template = YES;  // let the menu bar tint it (white in dark mode, black in light)
+
+  self.statusItem.button.image = img;
+  self.statusItem.button.imagePosition = NSImageOnly;
+  self.statusItem.button.title = @"";
 }
 
 - (NSImage *)batteryImageWithDailyPercent:(double)dailyPercent weeklyPercent:(double)weeklyPercent {
