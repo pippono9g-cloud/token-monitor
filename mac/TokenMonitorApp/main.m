@@ -913,27 +913,23 @@
   NSInteger xs = (NSInteger)round(fmin(100.0, fmax(0.0, codexSession)));
   NSInteger xw = (NSInteger)round(fmin(100.0, fmax(0.0, codexWeekly)));
 
-  NSString *lbl1 = @"S", *lbl2 = @"W";
-  NSString *c1 = [NSString stringWithFormat:@"%3ld%%", (long)cs];
-  NSString *c2 = [NSString stringWithFormat:@"%3ld%%", (long)cw];
-  NSString *x1 = [NSString stringWithFormat:@"%3ld%%", (long)xs];
-  NSString *x2 = [NSString stringWithFormat:@"%3ld%%", (long)xw];
+  // Format: "xx%C  xx%X" — number then letter suffix, two rows (session / weekly)
+  NSString *top1 = [NSString stringWithFormat:@"%ld%%C", (long)cs];
+  NSString *bot1 = [NSString stringWithFormat:@"%ld%%C", (long)cw];
+  NSString *top2 = [NSString stringWithFormat:@"%ld%%X", (long)xs];
+  NSString *bot2 = [NSString stringWithFormat:@"%ld%%X", (long)xw];
 
   NSFont *font = [NSFont monospacedDigitSystemFontOfSize:6.4 weight:NSFontWeightSemibold];
   NSDictionary *attrs = @{NSFontAttributeName: font, NSForegroundColorAttributeName: [NSColor blackColor]};
-  NSSize lblSz1 = [lbl1 sizeWithAttributes:attrs], lblSz2 = [lbl2 sizeWithAttributes:attrs];
-  NSSize c1Size = [c1 sizeWithAttributes:attrs], c2Size = [c2 sizeWithAttributes:attrs];
-  NSSize x1Size = [x1 sizeWithAttributes:attrs], x2Size = [x2 sizeWithAttributes:attrs];
-  NSSize markSize = [@"X" sizeWithAttributes:attrs];
-  CGFloat lblW = fmax(lblSz1.width, lblSz2.width);
-  CGFloat valueW = fmax(fmax(c1Size.width, c2Size.width), fmax(x1Size.width, x2Size.width));
-  CGFloat lineH = fmax(fmax(c1Size.height, c2Size.height), fmax(x1Size.height, x2Size.height));
-  CGFloat padX = 1.0, padTop = 1.5, padBottom = 0.5, gap = 2.0, dividerW = 1.0, groupGap = 3.0;
-  CGFloat cMarkX = padX + lblW + gap + dividerW + gap;
-  CGFloat cValueX = cMarkX + markSize.width;
-  CGFloat xMarkX = cValueX + valueW + groupGap;
-  CGFloat xValueX = xMarkX + markSize.width;
-  CGFloat imgW = ceil(xValueX + valueW + padX);
+
+  NSSize top1Sz = [top1 sizeWithAttributes:attrs], bot1Sz = [bot1 sizeWithAttributes:attrs];
+  NSSize top2Sz = [top2 sizeWithAttributes:attrs], bot2Sz = [bot2 sizeWithAttributes:attrs];
+  CGFloat colW1 = fmax(top1Sz.width, bot1Sz.width);
+  CGFloat colW2 = fmax(top2Sz.width, bot2Sz.width);
+  CGFloat lineH = fmax(fmax(top1Sz.height, bot1Sz.height), fmax(top2Sz.height, bot2Sz.height));
+
+  CGFloat padX = 1.0, padTop = 1.5, padBottom = 0.5, colGap = 3.0;
+  CGFloat imgW = ceil(padX + colW1 + colGap + colW2 + padX);
   CGFloat imgH = ceil(lineH * 2 + padTop + padBottom);
 
   NSImage *img = [[NSImage alloc] initWithSize:NSMakeSize(imgW, imgH)];
@@ -941,28 +937,11 @@
   CGFloat topY = imgH - padTop - lineH;
   CGFloat botY = padBottom;
 
-  [lbl1 drawAtPoint:NSMakePoint(padX, topY) withAttributes:attrs];
-  [lbl2 drawAtPoint:NSMakePoint(padX, botY) withAttributes:attrs];
-  [@"C" drawAtPoint:NSMakePoint(cMarkX, topY) withAttributes:attrs];
-  [@"C" drawAtPoint:NSMakePoint(cMarkX, botY) withAttributes:attrs];
-  [c1 drawAtPoint:NSMakePoint(cValueX + valueW - c1Size.width, topY) withAttributes:attrs];
-  [c2 drawAtPoint:NSMakePoint(cValueX + valueW - c2Size.width, botY) withAttributes:attrs];
-  [@"X" drawAtPoint:NSMakePoint(xMarkX, topY) withAttributes:attrs];
-  [@"X" drawAtPoint:NSMakePoint(xMarkX, botY) withAttributes:attrs];
-  [x1 drawAtPoint:NSMakePoint(xValueX + valueW - x1Size.width, topY) withAttributes:attrs];
-  [x2 drawAtPoint:NSMakePoint(xValueX + valueW - x2Size.width, botY) withAttributes:attrs];
+  [top1 drawAtPoint:NSMakePoint(padX + colW1 - top1Sz.width, topY) withAttributes:attrs];
+  [bot1 drawAtPoint:NSMakePoint(padX + colW1 - bot1Sz.width, botY) withAttributes:attrs];
+  [top2 drawAtPoint:NSMakePoint(padX + colW1 + colGap, topY) withAttributes:attrs];
+  [bot2 drawAtPoint:NSMakePoint(padX + colW1 + colGap, botY) withAttributes:attrs];
 
-  CGFloat descent = -font.descender;
-  CGFloat capHeight = font.capHeight;
-  CGFloat dividerBottom = botY + descent;
-  CGFloat dividerTop = topY + descent + capHeight + 1.0;
-  CGFloat divX = padX + lblW + gap + dividerW / 2.0;
-  NSBezierPath *divider = [NSBezierPath bezierPath];
-  divider.lineWidth = dividerW;
-  [[NSColor blackColor] setStroke];
-  [divider moveToPoint:NSMakePoint(divX, dividerBottom)];
-  [divider lineToPoint:NSMakePoint(divX, dividerTop)];
-  [divider stroke];
   [img unlockFocus];
   img.template = YES;
 
