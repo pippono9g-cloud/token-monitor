@@ -1,6 +1,6 @@
 # Token Monitor
 
-A small local app for manually tracking token usage and estimated cost.
+A small local menu-bar app for tracking Codex usage from local session logs.
 
 Open `index.html` in a browser to use it. Entries are stored in the browser with `localStorage`.
 
@@ -12,7 +12,15 @@ Build the desktop app:
 ./mac/build-mac-app.sh
 ```
 
-Open `dist/TokenMonitor.app` to run it as a Mac app window.
+Open `TokenMonitor.app` to run it as a Mac menu-bar app.
+
+Codex usage is read locally from:
+
+```text
+~/.codex/sessions/**/*.jsonl
+```
+
+No network call is required for Codex usage.
 
 Claude sync uses the Anthropic usage API with an Admin/API key. It does not read private Claude.ai or Claude Desktop login sessions.
 

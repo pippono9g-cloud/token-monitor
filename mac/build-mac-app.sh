@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 MAC_DIR="$ROOT_DIR/mac"
-APP_DIR="$ROOT_DIR/dist/TokenMonitor.app"
+APP_DIR="$ROOT_DIR/TokenMonitor.app"
 EXECUTABLE="$APP_DIR/Contents/MacOS/TokenMonitor"
 RESOURCES="$APP_DIR/Contents/Resources"
 MODULE_CACHE="$ROOT_DIR/.build/module-cache"
@@ -23,16 +23,23 @@ ICNS="$RESOURCES/AppIcon.icns"
 clang -fobjc-arc "$MAC_DIR/generate_icon.m" -framework Cocoa -o "$MODULE_CACHE/generate_icon"
 "$MODULE_CACHE/generate_icon" "$ICON_PNG"
 
+rm -rf "$ICONSET"
 mkdir -p "$ICONSET"
-for size in 16 32 64 128 256 512 1024; do
+for size in 16 32 128 256 512; do
   sips -z $size $size "$ICON_PNG" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
 done
 # Retina variants
-for size in 16 32 64 128 256 512; do
+for size in 16 32 128 256 512; do
   double=$((size * 2))
   sips -z $double $double "$ICON_PNG" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
 done
-iconutil --convert icns "$ICONSET" --output "$ICNS"
+if ! iconutil --convert icns "$ICONSET" --output "$ICNS"; then
+  if [[ -f "$ICNS" ]]; then
+    echo "warning: iconutil failed; keeping existing AppIcon.icns" >&2
+  else
+    exit 1
+  fi
+fi
 
 # ── Info.plist ────────────────────────────────────────────────────
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
@@ -49,9 +56,9 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
   <key>CFBundleExecutable</key>
   <string>TokenMonitor</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.4.0</string>
+  <string>1.5.0</string>
   <key>CFBundleVersion</key>
-  <string>1.4.0</string>
+  <string>1.5.0</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>LSUIElement</key>
@@ -71,6 +78,7 @@ CLANG_MODULE_CACHE_PATH="$MODULE_CACHE" clang \
   -o "$EXECUTABLE"
 
 chmod +x "$EXECUTABLE"
+xattr -cr "$APP_DIR" 2>/dev/null || true
 codesign --force --deep --sign - "$APP_DIR" >/dev/null
 
 echo "$APP_DIR"

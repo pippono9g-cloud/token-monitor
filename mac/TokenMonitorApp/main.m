@@ -8,15 +8,33 @@
 @property(nonatomic, strong) WKWebView *claudeWebView;
 @property(nonatomic, strong) NSWindow *claudeLoginWindow;
 @property(nonatomic, assign) BOOL claudeWebViewPendingRead;
-@property(nonatomic, assign) BOOL apiRealtimeConnected;
+@property(nonatomic, assign) BOOL claudeAPIConnected;
+@property(nonatomic, assign) BOOL codexLogConnected;
 @property(nonatomic, assign) BOOL hasUsage;
 @property(nonatomic, assign) double sessionPercent;
 @property(nonatomic, assign) double weeklyPercent;
 @property(nonatomic, copy) NSString *sessionResetText;
 @property(nonatomic, copy) NSString *weeklyResetText;
+@property(nonatomic, assign) BOOL codexHasUsage;
+@property(nonatomic, assign) double codexSessionPercent;
+@property(nonatomic, assign) double codexWeeklyPercent;
+@property(nonatomic, copy) NSString *codexSessionResetText;
+@property(nonatomic, copy) NSString *codexWeeklyResetText;
 @end
 
 @implementation AppDelegate
+
+- (NSAttributedString *)statusTitleWithLabel:(NSString *)label connected:(BOOL)connected {
+  NSColor *dotColor = connected ? [NSColor systemGreenColor] : [NSColor systemRedColor];
+  CGFloat menuFontSize = [NSFont systemFontSize];
+  NSMutableAttributedString *attr = [[NSMutableAttributedString alloc] initWithString:label
+      attributes:@{NSFontAttributeName: [NSFont menuFontOfSize:0]}];
+  [attr appendAttributedString:[[NSAttributedString alloc] initWithString:@"  ●"
+      attributes:@{NSFontAttributeName: [NSFont systemFontOfSize:menuFontSize * 0.6],
+                   NSForegroundColorAttributeName: dotColor,
+                   NSBaselineOffsetAttributeName: @(menuFontSize * 0.15)}]];
+  return attr;
+}
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
   WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
@@ -51,7 +69,7 @@
   self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
   self.statusItem.button.image = nil;
   self.statusItem.button.imagePosition = NSNoImage;
-  [self updateStatusIconWithDailyPercent:0 weeklyPercent:0];
+  [self updateStatusIconWithClaudeSession:0 claudeWeekly:0 codexSession:0 codexWeekly:0];
   self.statusItem.button.toolTip = @"Token Monitor";
 
   // Permanent menu → opens on both left- and right-click. Rebuilt on each open so
@@ -75,30 +93,38 @@
   NSMenuItem *usageHeader = [menu addItemWithTitle:@"Usage" action:nil keyEquivalent:@""];
   usageHeader.enabled = NO;
   if (self.hasUsage) {
-    NSString *s = [NSString stringWithFormat:@"5h  %.0f%%   ·  resets %@", self.sessionPercent,
-                   self.sessionResetText.length ? self.sessionResetText : @"—"];
-    NSString *w = [NSString stringWithFormat:@"Weekly  %.0f%%   ·  resets %@", self.weeklyPercent,
+    NSString *s = [NSString stringWithFormat:@"Claude 5h  %.0f%%   ·  %@", self.sessionPercent,
+                   self.sessionResetText.length ? self.sessionResetText : @"Reset in 00:00"];
+    NSString *w = [NSString stringWithFormat:@"Claude 7d  %.0f%%   ·  Reset %@", self.weeklyPercent,
                    self.weeklyResetText.length ? self.weeklyResetText : @"—"];
     [menu addItemWithTitle:s action:nil keyEquivalent:@""].enabled = NO;
     [menu addItemWithTitle:w action:nil keyEquivalent:@""].enabled = NO;
-  } else {
+  }
+  if (self.hasUsage && self.codexHasUsage) {
+    [menu addItem:[NSMenuItem separatorItem]];
+  }
+  if (self.codexHasUsage) {
+    NSString *s = [NSString stringWithFormat:@"Codex 5h   %.0f%%   ·  %@",
+                   self.codexSessionPercent,
+                   self.codexSessionResetText.length ? self.codexSessionResetText : @"Reset in 00:00"];
+    NSString *w = [NSString stringWithFormat:@"Codex 7d   %.0f%%   ·  Reset %@",
+                   self.codexWeeklyPercent,
+                   self.codexWeeklyResetText.length ? self.codexWeeklyResetText : @"—"];
+    [menu addItemWithTitle:s action:nil keyEquivalent:@""].enabled = NO;
+    [menu addItemWithTitle:w action:nil keyEquivalent:@""].enabled = NO;
+  }
+  if (!self.hasUsage && !self.codexHasUsage) {
     [menu addItemWithTitle:@"กำลังโหลด…" action:nil keyEquivalent:@""].enabled = NO;
   }
 
   [menu addItem:[NSMenuItem separatorItem]];
 
   // ── Connection status (small colored dot) ──
-  NSMenuItem *apiItem = [menu addItemWithTitle:@"" action:@selector(setOAuthTokenFromMenu:) keyEquivalent:@""];
-  NSColor *dotColor = self.apiRealtimeConnected ? [NSColor systemGreenColor] : [NSColor systemRedColor];
-  NSString *apiLabel = self.apiRealtimeConnected ? @"Claude API: Connected" : @"Claude API: Web mode";
-  CGFloat menuFontSize = [NSFont systemFontSize];
-  NSMutableAttributedString *apiAttr = [[NSMutableAttributedString alloc] initWithString:apiLabel
-      attributes:@{NSFontAttributeName: [NSFont menuFontOfSize:0]}];
-  [apiAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@"  ●"
-      attributes:@{NSFontAttributeName: [NSFont systemFontOfSize:menuFontSize * 0.6],
-                   NSForegroundColorAttributeName: dotColor,
-                   NSBaselineOffsetAttributeName: @(menuFontSize * 0.15)}]];
-  apiItem.attributedTitle = apiAttr;
+  NSMenuItem *claudeApiItem = [menu addItemWithTitle:@"" action:@selector(setOAuthTokenFromMenu:) keyEquivalent:@""];
+  claudeApiItem.attributedTitle = [self statusTitleWithLabel:@"Claude API" connected:self.claudeAPIConnected];
+
+  NSMenuItem *codexLogItem = [menu addItemWithTitle:@"" action:@selector(refreshFromMenu:) keyEquivalent:@""];
+  codexLogItem.attributedTitle = [self statusTitleWithLabel:@"Codex logs" connected:self.codexLogConnected];
 
   [menu addItemWithTitle:@"Refresh" action:@selector(refreshFromMenu:) keyEquivalent:@"r"];
 
@@ -112,6 +138,7 @@
 
 - (void)refreshFromMenu:(id)sender {
   [self readClaudeDesktopUsage];
+  [self readCodexUsageFromLogs];
 }
 
 - (NSString *)appVersion {
@@ -191,17 +218,113 @@
     [self handleClaudeWebViewDidLoad];
     return;
   }
-  // Main webView finished loading — auto-fetch Claude usage
+  // Main webView finished loading — auto-fetch Claude and Codex usage.
   [self refreshStatusItem];
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
     [self readClaudeDesktopUsage];
+    [self readCodexUsageFromLogs];
   });
-  // Schedule auto-refresh every 3 minutes (the safe floor for the usage endpoint)
+  // Schedule auto-refresh every 3 minutes.
   [NSTimer scheduledTimerWithTimeInterval:3 * 60
                                    target:self
-                                 selector:@selector(readClaudeDesktopUsage)
+                                 selector:@selector(readCodexUsageFromLogs)
                                  userInfo:nil
                                   repeats:YES];
+}
+
+- (void)readCodexUsageFromLogs {
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    NSString *script =
+      @"import json, pathlib, time, datetime\n"
+       "latest=None\n"
+       "root=pathlib.Path.home()/'.codex'/'sessions'\n"
+       "for p in root.rglob('*.jsonl'):\n"
+       "    try:\n"
+       "        with p.open(encoding='utf-8') as f:\n"
+       "            for line in f:\n"
+       "                if '\"type\":\"token_count\"' not in line:\n"
+       "                    continue\n"
+       "                obj=json.loads(line)\n"
+       "                if obj.get('type')!='event_msg' or obj.get('payload',{}).get('type')!='token_count':\n"
+       "                    continue\n"
+       "                ts=obj.get('timestamp','')\n"
+       "                if latest is None or ts > latest[0]:\n"
+       "                    latest=(ts,obj)\n"
+       "    except Exception:\n"
+       "        pass\n"
+       "if latest is None:\n"
+       "    raise SystemExit('no Codex token_count events found')\n"
+       "ts,obj=latest\n"
+       "payload=obj['payload']\n"
+       "rl=payload.get('rate_limits') or {}\n"
+       "primary=rl.get('primary') or {}\n"
+       "secondary=rl.get('secondary') or {}\n"
+       "def weekday_time(epoch):\n"
+       "    if not epoch: return ''\n"
+       "    return datetime.datetime.fromtimestamp(epoch).strftime('%a %-I:%M %p')\n"
+       "def reset_in(epoch):\n"
+       "    if not epoch: return ''\n"
+       "    seconds=max(0,int(epoch-time.time()))\n"
+       "    h=seconds//3600\n"
+       "    m=(seconds-h*3600)//60\n"
+       "    return f'Reset in {h:02d}:{m:02d}'\n"
+       "out={\n"
+       "  'sessionPercent': float(primary.get('used_percent') or 0),\n"
+       "  'weeklyPercent': float(secondary.get('used_percent') or 0),\n"
+       "  'sessionReset': reset_in(primary.get('resets_at')),\n"
+       "  'weeklyReset': weekday_time(secondary.get('resets_at')),\n"
+       "  'planType': (rl.get('plan_type') or 'codex').title(),\n"
+       "  'timestamp': ts,\n"
+       "}\n"
+       "print(json.dumps(out))\n";
+
+    NSTask *task = [[NSTask alloc] init];
+    task.launchPath = @"/usr/bin/python3";
+    task.arguments = @[@"-c", script];
+    NSPipe *outPipe = [NSPipe pipe];
+    task.standardOutput = outPipe;
+    task.standardError = [NSPipe pipe];
+    @try { [task launch]; } @catch (NSException *e) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        self.codexLogConnected = NO;
+        [self reportClaudeSyncError:@"Could not start Codex usage reader."];
+      });
+      return;
+    }
+    NSData *data = [[outPipe fileHandleForReading] readDataToEndOfFile];
+    [task waitUntilExit];
+    if (task.terminationStatus != 0 || data.length == 0) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        self.codexLogConnected = NO;
+        [self reportClaudeSyncError:@"Could not read Codex usage logs."];
+      });
+      return;
+    }
+    NSDictionary *usage = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![usage isKindOfClass:[NSDictionary class]]) {
+      dispatch_async(dispatch_get_main_queue(), ^{
+        self.codexLogConnected = NO;
+        [self reportClaudeSyncError:@"Could not parse Codex usage logs."];
+      });
+      return;
+    }
+    NSData *jsonData = [NSJSONSerialization dataWithJSONObject:usage options:0 error:nil];
+    dispatch_async(dispatch_get_main_queue(), ^{
+      self.codexHasUsage = YES;
+      self.codexSessionPercent = [usage[@"sessionPercent"] doubleValue];
+      self.codexWeeklyPercent = [usage[@"weeklyPercent"] doubleValue];
+      self.codexSessionResetText = usage[@"sessionReset"] ?: @"";
+      self.codexWeeklyResetText = usage[@"weeklyReset"] ?: @"";
+      self.codexLogConnected = YES;
+      [self updateStatusIconWithClaudeSession:self.sessionPercent
+                                 claudeWeekly:self.weeklyPercent
+                                 codexSession:self.codexSessionPercent
+                                  codexWeekly:self.codexWeeklyPercent];
+      self.statusItem.button.toolTip = [NSString stringWithFormat:@"Claude 5h %.1f%% · 7d %.1f%%\nCodex 5h %.1f%% · 7d %.1f%%\n100%% = limit reached",
+                                        self.sessionPercent, self.weeklyPercent,
+                                        self.codexSessionPercent, self.codexWeeklyPercent];
+    });
+  });
 }
 
 - (void)userContentController:(WKUserContentController *)userContentController didReceiveScriptMessage:(WKScriptMessage *)message {
@@ -376,7 +499,7 @@
 }
 
 - (void)readClaudeDesktopWebUsage {
-  self.apiRealtimeConnected = NO;
+  self.claudeAPIConnected = NO;
   if (!self.claudeWebView) {
     WKWebViewConfiguration *config = [[WKWebViewConfiguration alloc] init];
     config.websiteDataStore = [WKWebsiteDataStore defaultDataStore];
@@ -508,7 +631,8 @@
   NSRegularExpression *sessionResetRegex = [NSRegularExpression regularExpressionWithPattern:@"Resets in (\\d+(?:\\s+hr(?:\\s+\\d+\\s+min)?)?(?:\\s*\\d+\\s+min)?)" options:0 error:nil];
   NSTextCheckingResult *sessionResetMatch = [sessionResetRegex firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
   if (sessionResetMatch && sessionResetMatch.numberOfRanges > 1) {
-    sessionReset = [[text substringWithRange:[sessionResetMatch rangeAtIndex:1]] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    NSString *countdown = [[text substringWithRange:[sessionResetMatch rangeAtIndex:1]] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    sessionReset = [self resetInStringFromCountdownText:countdown];
   }
 
   // "Resets Fri 12:59 AM"
@@ -537,8 +661,7 @@
   if (s < 0) s = 0;
   NSInteger h = (NSInteger)(s / 3600);
   NSInteger m = (NSInteger)((s - h * 3600) / 60);
-  if (h > 0) return [NSString stringWithFormat:@"%ld hr %ld min", (long)h, (long)m];
-  return [NSString stringWithFormat:@"%ld min", (long)m];
+  return [NSString stringWithFormat:@"Reset in %02ld:%02ld", (long)h, (long)m];
 }
 
 - (NSString *)weekdayTimeStringFor:(NSDate *)date {
@@ -547,6 +670,51 @@
   f.locale = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US"];
   f.dateFormat = @"EEE h:mm a";
   return [f stringFromDate:date];
+}
+
+- (NSString *)weekdayTimeStringFromCountdownText:(NSString *)text {
+  if (![text isKindOfClass:[NSString class]] || text.length == 0) return @"";
+  NSRegularExpression *hoursRe = [NSRegularExpression regularExpressionWithPattern:@"(\\d+)\\s*hr" options:0 error:nil];
+  NSRegularExpression *minsRe = [NSRegularExpression regularExpressionWithPattern:@"(\\d+)\\s*min" options:0 error:nil];
+  NSTextCheckingResult *hoursMatch = [hoursRe firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
+  NSTextCheckingResult *minsMatch = [minsRe firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
+  NSInteger hours = 0;
+  NSInteger minutes = 0;
+  if (hoursMatch && hoursMatch.numberOfRanges > 1) {
+    hours = [[text substringWithRange:[hoursMatch rangeAtIndex:1]] integerValue];
+  }
+  if (minsMatch && minsMatch.numberOfRanges > 1) {
+    minutes = [[text substringWithRange:[minsMatch rangeAtIndex:1]] integerValue];
+  }
+  if (hours == 0 && minutes == 0) return @"";
+  NSDate *date = [NSDate dateWithTimeIntervalSinceNow:(hours * 3600 + minutes * 60)];
+  return [self weekdayTimeStringFor:date];
+}
+
+- (NSString *)resetInStringFromCountdownText:(NSString *)text {
+  if (![text isKindOfClass:[NSString class]] || text.length == 0) return @"";
+  if ([text hasPrefix:@"Reset in "]) return text;
+  NSRegularExpression *clockRe = [NSRegularExpression regularExpressionWithPattern:@"^(\\d{1,2}):(\\d{2})$" options:0 error:nil];
+  NSTextCheckingResult *clockMatch = [clockRe firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
+  if (clockMatch && clockMatch.numberOfRanges > 2) {
+    NSInteger hours = [[text substringWithRange:[clockMatch rangeAtIndex:1]] integerValue];
+    NSInteger minutes = [[text substringWithRange:[clockMatch rangeAtIndex:2]] integerValue];
+    return [NSString stringWithFormat:@"Reset in %02ld:%02ld", (long)hours, (long)minutes];
+  }
+  NSRegularExpression *hoursRe = [NSRegularExpression regularExpressionWithPattern:@"(\\d+)\\s*hr" options:0 error:nil];
+  NSRegularExpression *minsRe = [NSRegularExpression regularExpressionWithPattern:@"(\\d+)\\s*min" options:0 error:nil];
+  NSTextCheckingResult *hoursMatch = [hoursRe firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
+  NSTextCheckingResult *minsMatch = [minsRe firstMatchInString:text options:0 range:NSMakeRange(0, text.length)];
+  NSInteger hours = 0;
+  NSInteger minutes = 0;
+  if (hoursMatch && hoursMatch.numberOfRanges > 1) {
+    hours = [[text substringWithRange:[hoursMatch rangeAtIndex:1]] integerValue];
+  }
+  if (minsMatch && minsMatch.numberOfRanges > 1) {
+    minutes = [[text substringWithRange:[minsMatch rangeAtIndex:1]] integerValue];
+  }
+  if (hours == 0 && minutes == 0) return @"";
+  return [NSString stringWithFormat:@"Reset in %02ld:%02ld", (long)hours, (long)minutes];
 }
 
 - (void)fetchUsageWithToken:(NSString *)token {
@@ -581,6 +749,7 @@
       return;
     }
     if (http.statusCode == 429) {
+      self.claudeAPIConnected = NO;
       [self reportClaudeSyncError:@"API ถูก rate-limit ชั่วคราว จะลองใหม่รอบถัดไป"];
       return;
     }
@@ -604,7 +773,16 @@
     NSData *jsonData = [NSJSONSerialization dataWithJSONObject:usage options:0 error:nil];
     NSString *json = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
     dispatch_async(dispatch_get_main_queue(), ^{
-      self.apiRealtimeConnected = YES;
+      self.claudeAPIConnected = YES;
+      self.hasUsage = YES;
+      self.sessionPercent = sessionPercent;
+      self.weeklyPercent = weeklyPercent;
+      self.sessionResetText = sessionReset.length ? sessionReset : self.sessionResetText;
+      self.weeklyResetText = weeklyReset.length ? weeklyReset : self.weeklyResetText;
+      [self updateStatusIconWithClaudeSession:self.sessionPercent
+                                 claudeWeekly:self.weeklyPercent
+                                 codexSession:self.codexSessionPercent
+                                  codexWeekly:self.codexWeeklyPercent];
       [self.claudeLoginWindow orderOut:nil];
       NSString *script = [NSString stringWithFormat:@"window.applyClaudeAppUsage(%@);", json];
       [self.webView evaluateJavaScript:script completionHandler:^(id r, NSError *e) {
@@ -630,12 +808,14 @@
 
   NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
     if (error) {
+      self.claudeAPIConnected = NO;
       [self reportClaudeSyncError:[NSString stringWithFormat:@"Claude sync failed: %@", error.localizedDescription]];
       return;
     }
 
     NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
     if (httpResponse.statusCode < 200 || httpResponse.statusCode >= 300) {
+      self.claudeAPIConnected = NO;
       NSString *message = [NSString stringWithFormat:@"Claude API returned %ld.", (long)httpResponse.statusCode];
       [self reportClaudeSyncError:message];
       return;
@@ -643,6 +823,7 @@
 
     NSString *json = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
     if (json.length == 0) {
+      self.claudeAPIConnected = NO;
       [self reportClaudeSyncError:@"Claude API returned an empty response."];
       return;
     }
@@ -651,8 +832,10 @@
     dispatch_async(dispatch_get_main_queue(), ^{
       [self.webView evaluateJavaScript:script completionHandler:^(id result, NSError *scriptError) {
         if (scriptError) {
+          self.claudeAPIConnected = NO;
           [self reportClaudeSyncError:[NSString stringWithFormat:@"Claude import failed: %@", scriptError.localizedDescription]];
         } else {
+          self.claudeAPIConnected = YES;
           [self refreshStatusItem];
         }
       }];
@@ -694,20 +877,98 @@
 
     dispatch_async(dispatch_get_main_queue(), ^{
       [self updateStatusIconWithDailyPercent:dailyPercent weeklyPercent:weeklyPercent];
-      NSString *sessionResetDisplay = (dailyReset.length > 0 && [dailyReset rangeOfCharacterFromSet:[NSCharacterSet letterCharacterSet]].location != NSNotFound && ![dailyReset containsString:@"/"]) ? [@"in " stringByAppendingString:dailyReset] : dailyReset;
+      NSString *sessionResetDisplay = [self resetInStringFromCountdownText:dailyReset];
+      if (sessionResetDisplay.length == 0 && [dailyReset hasPrefix:@"Reset in "]) sessionResetDisplay = dailyReset;
+      if (sessionResetDisplay.length == 0 && self.sessionResetText.length > 0) sessionResetDisplay = self.sessionResetText;
+      if (sessionResetDisplay.length == 0) sessionResetDisplay = @"Reset in 00:00";
       // Cache for the in-menu Usage section.
       self.hasUsage = YES;
       self.sessionPercent = dailyPercent;
       self.weeklyPercent = weeklyPercent;
       self.sessionResetText = sessionResetDisplay;
       self.weeklyResetText = weeklyReset;
-      self.statusItem.button.toolTip = [NSString stringWithFormat:@"Session %.1f%% · resets %@\nWeekly %.1f%% · resets %@",
-                                        dailyPercent,
-                                        sessionResetDisplay,
-                                        weeklyPercent,
-                                        weeklyReset];
+      [self updateStatusIconWithClaudeSession:self.sessionPercent
+                                 claudeWeekly:self.weeklyPercent
+                                 codexSession:self.codexSessionPercent
+                                  codexWeekly:self.codexWeeklyPercent];
+      self.statusItem.button.toolTip = [NSString stringWithFormat:@"Claude 5h %.1f%% · %@\nClaude 7d %.1f%% · Reset %@\nCodex 5h %.1f%% · %@\nCodex 7d %.1f%% · Reset %@\n100%% = limit reached",
+                                        self.sessionPercent,
+                                        sessionResetDisplay.length ? sessionResetDisplay : @"Reset in 00:00",
+                                        self.weeklyPercent,
+                                        weeklyReset.length ? weeklyReset : @"—",
+                                        self.codexSessionPercent,
+                                        self.codexSessionResetText.length ? self.codexSessionResetText : @"Reset in 00:00",
+                                        self.codexWeeklyPercent,
+                                        self.codexWeeklyResetText.length ? self.codexWeeklyResetText : @"—"];
     });
   }];
+}
+
+- (void)updateStatusIconWithClaudeSession:(double)claudeSession
+                             claudeWeekly:(double)claudeWeekly
+                             codexSession:(double)codexSession
+                              codexWeekly:(double)codexWeekly {
+  NSInteger cs = (NSInteger)round(fmin(100.0, fmax(0.0, claudeSession)));
+  NSInteger cw = (NSInteger)round(fmin(100.0, fmax(0.0, claudeWeekly)));
+  NSInteger xs = (NSInteger)round(fmin(100.0, fmax(0.0, codexSession)));
+  NSInteger xw = (NSInteger)round(fmin(100.0, fmax(0.0, codexWeekly)));
+
+  NSString *lbl1 = @"S", *lbl2 = @"W";
+  NSString *c1 = [NSString stringWithFormat:@"%3ld%%", (long)cs];
+  NSString *c2 = [NSString stringWithFormat:@"%3ld%%", (long)cw];
+  NSString *x1 = [NSString stringWithFormat:@"%3ld%%", (long)xs];
+  NSString *x2 = [NSString stringWithFormat:@"%3ld%%", (long)xw];
+
+  NSFont *font = [NSFont monospacedDigitSystemFontOfSize:6.4 weight:NSFontWeightSemibold];
+  NSDictionary *attrs = @{NSFontAttributeName: font, NSForegroundColorAttributeName: [NSColor blackColor]};
+  NSSize lblSz1 = [lbl1 sizeWithAttributes:attrs], lblSz2 = [lbl2 sizeWithAttributes:attrs];
+  NSSize c1Size = [c1 sizeWithAttributes:attrs], c2Size = [c2 sizeWithAttributes:attrs];
+  NSSize x1Size = [x1 sizeWithAttributes:attrs], x2Size = [x2 sizeWithAttributes:attrs];
+  NSSize markSize = [@"X" sizeWithAttributes:attrs];
+  CGFloat lblW = fmax(lblSz1.width, lblSz2.width);
+  CGFloat valueW = fmax(fmax(c1Size.width, c2Size.width), fmax(x1Size.width, x2Size.width));
+  CGFloat lineH = fmax(fmax(c1Size.height, c2Size.height), fmax(x1Size.height, x2Size.height));
+  CGFloat padX = 1.0, padTop = 1.5, padBottom = 0.5, gap = 2.0, dividerW = 1.0, groupGap = 3.0;
+  CGFloat cMarkX = padX + lblW + gap + dividerW + gap;
+  CGFloat cValueX = cMarkX + markSize.width;
+  CGFloat xMarkX = cValueX + valueW + groupGap;
+  CGFloat xValueX = xMarkX + markSize.width;
+  CGFloat imgW = ceil(xValueX + valueW + padX);
+  CGFloat imgH = ceil(lineH * 2 + padTop + padBottom);
+
+  NSImage *img = [[NSImage alloc] initWithSize:NSMakeSize(imgW, imgH)];
+  [img lockFocus];
+  CGFloat topY = imgH - padTop - lineH;
+  CGFloat botY = padBottom;
+
+  [lbl1 drawAtPoint:NSMakePoint(padX, topY) withAttributes:attrs];
+  [lbl2 drawAtPoint:NSMakePoint(padX, botY) withAttributes:attrs];
+  [@"C" drawAtPoint:NSMakePoint(cMarkX, topY) withAttributes:attrs];
+  [@"C" drawAtPoint:NSMakePoint(cMarkX, botY) withAttributes:attrs];
+  [c1 drawAtPoint:NSMakePoint(cValueX + valueW - c1Size.width, topY) withAttributes:attrs];
+  [c2 drawAtPoint:NSMakePoint(cValueX + valueW - c2Size.width, botY) withAttributes:attrs];
+  [@"X" drawAtPoint:NSMakePoint(xMarkX, topY) withAttributes:attrs];
+  [@"X" drawAtPoint:NSMakePoint(xMarkX, botY) withAttributes:attrs];
+  [x1 drawAtPoint:NSMakePoint(xValueX + valueW - x1Size.width, topY) withAttributes:attrs];
+  [x2 drawAtPoint:NSMakePoint(xValueX + valueW - x2Size.width, botY) withAttributes:attrs];
+
+  CGFloat descent = -font.descender;
+  CGFloat capHeight = font.capHeight;
+  CGFloat dividerBottom = botY + descent;
+  CGFloat dividerTop = topY + descent + capHeight + 1.0;
+  CGFloat divX = padX + lblW + gap + dividerW / 2.0;
+  NSBezierPath *divider = [NSBezierPath bezierPath];
+  divider.lineWidth = dividerW;
+  [[NSColor blackColor] setStroke];
+  [divider moveToPoint:NSMakePoint(divX, dividerBottom)];
+  [divider lineToPoint:NSMakePoint(divX, dividerTop)];
+  [divider stroke];
+  [img unlockFocus];
+  img.template = YES;
+
+  self.statusItem.button.image = img;
+  self.statusItem.button.imagePosition = NSImageOnly;
+  self.statusItem.button.title = @"";
 }
 
 - (void)updateDockIconWithDailyPercent:(double)dailyPercent weeklyPercent:(double)weeklyPercent {

@@ -37,6 +37,7 @@ const sessionPercent = document.querySelector("#sessionPercent");
 const sessionResetText = document.querySelector("#sessionResetText");
 const weeklyPercentLabel = document.querySelector("#weeklyPercentLabel");
 const weeklyResetLabel = document.querySelector("#weeklyResetLabel");
+const planLabel = document.querySelector("#planLabel");
 const manualSessionPercent = document.querySelector("#manualSessionPercent");
 const manualWeeklyPercent = document.querySelector("#manualWeeklyPercent");
 const manualWeeklyReset = document.querySelector("#manualWeeklyReset");
@@ -319,6 +320,29 @@ function applyClaudeAppUsage(usage) {
 }
 
 window.applyClaudeAppUsage = applyClaudeAppUsage;
+
+function applyCodexUsage(usage) {
+  mirror = {
+    enabled: true,
+    sessionPercent: Number(usage.sessionPercent) || 0,
+    weeklyPercent: Number(usage.weeklyPercent) || 0,
+    weeklyReset: usage.weeklyReset || mirror.weeklyReset || "",
+    sessionReset: usage.sessionReset || "",
+    updatedAt: new Date().toISOString(),
+  };
+
+  localStorage.setItem(mirrorKey, JSON.stringify(mirror));
+  manualSessionPercent.value = mirror.sessionPercent;
+  manualWeeklyPercent.value = mirror.weeklyPercent;
+  manualWeeklyReset.value = mirror.weeklyReset;
+  if (planLabel) planLabel.textContent = usage.planType ? `Codex ${usage.planType}` : "Codex";
+  render();
+  setClaudeSyncStatus("Read Codex usage from local logs.");
+  clearTimeout(syncTimeoutId);
+  setRefreshBusy(false);
+}
+
+window.applyCodexUsage = applyCodexUsage;
 
 function applyClaudeDesktopTokens({ tokens, date }) {
   const id = `claude-desktop-${date}`;

@@ -33,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKNavigationDelegate {
   }
 
   private func loadApp() {
-    let appURL = URL(fileURLWithPath: "/Users/pippono/Documents/Token Monitor/index.html")
+    let appURL = Bundle.main.resourceURL!.appendingPathComponent("index.html")
     let directoryURL = appURL.deletingLastPathComponent()
     webView.loadFileURL(appURL, allowingReadAccessTo: directoryURL)
   }
