@@ -1,5 +1,6 @@
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
+#import <ServiceManagement/ServiceManagement.h>
 
 @interface AppDelegate : NSObject <NSApplicationDelegate, WKNavigationDelegate, WKScriptMessageHandler, NSMenuDelegate>
 @property(nonatomic, strong) WKWebView *webView;
@@ -129,6 +130,11 @@
   [menu addItemWithTitle:@"Refresh" action:@selector(refreshFromMenu:) keyEquivalent:@"r"];
 
   [menu addItem:[NSMenuItem separatorItem]];
+  BOOL launchAtLogin = [self isLaunchAtLoginEnabled];
+  NSString *launchTitle = launchAtLogin ? @"✓ Launch at Login" : @"Launch at Login";
+  [menu addItemWithTitle:launchTitle action:@selector(toggleLaunchAtLogin:) keyEquivalent:@""];
+
+  [menu addItem:[NSMenuItem separatorItem]];
   [menu addItemWithTitle:[NSString stringWithFormat:@"About Token Monitor (v%@)", [self appVersion]]
                   action:@selector(showAboutFromMenu:) keyEquivalent:@""];
   [menu addItemWithTitle:@"Check for Updates…" action:@selector(checkForUpdatesFromMenu:) keyEquivalent:@""];
@@ -206,6 +212,32 @@
     alert.informativeText = [NSString stringWithFormat:@"v%@ เป็นเวอร์ชันใหม่ที่สุด", [self appVersion]];
     [alert addButtonWithTitle:@"OK"];
     [alert runModal];
+  }
+}
+
+- (BOOL)isLaunchAtLoginEnabled {
+  if (@available(macOS 13.0, *)) {
+    return [SMAppService mainAppService].status == SMAppServiceStatusEnabled;
+  }
+  return NO;
+}
+
+- (void)toggleLaunchAtLogin:(id)sender {
+  if (@available(macOS 13.0, *)) {
+    NSError *error = nil;
+    if ([self isLaunchAtLoginEnabled]) {
+      [[SMAppService mainAppService] unregisterAndReturnError:&error];
+    } else {
+      [[SMAppService mainAppService] registerAndReturnError:&error];
+    }
+    if (error) {
+      NSAlert *alert = [[NSAlert alloc] init];
+      alert.messageText = @"Launch at Login";
+      alert.informativeText = error.localizedDescription ?: @"เปลี่ยนการตั้งค่าไม่สำเร็จ";
+      [alert addButtonWithTitle:@"OK"];
+      [NSApp activateIgnoringOtherApps:YES];
+      [alert runModal];
+    }
   }
 }
 

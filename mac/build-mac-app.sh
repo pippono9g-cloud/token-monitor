@@ -75,6 +75,7 @@ CLANG_MODULE_CACHE_PATH="$MODULE_CACHE" clang \
   "$ROOT_DIR/mac/TokenMonitorApp/main.m" \
   -framework Cocoa \
   -framework WebKit \
+  -framework ServiceManagement \
   -o "$EXECUTABLE"
 
 chmod +x "$EXECUTABLE"
