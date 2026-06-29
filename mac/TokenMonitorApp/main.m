@@ -913,23 +913,35 @@
   NSInteger xs = (NSInteger)round(fmin(100.0, fmax(0.0, codexSession)));
   NSInteger xw = (NSInteger)round(fmin(100.0, fmax(0.0, codexWeekly)));
 
-  // Format: "xx%C  xx%X" — number then letter suffix, two rows (session / weekly)
-  NSString *top1 = [NSString stringWithFormat:@"%ld%%C", (long)cs];
-  NSString *bot1 = [NSString stringWithFormat:@"%ld%%C", (long)cw];
-  NSString *top2 = [NSString stringWithFormat:@"%ld%%X", (long)xs];
-  NSString *bot2 = [NSString stringWithFormat:@"%ld%%X", (long)xw];
+  // Layout: S | xx%C  xx%X
+  //         W | xx%C  xx%X
+  NSString *lblS = @"S", *lblW = @"W";
+  NSString *cTop = [NSString stringWithFormat:@"%ld%%C", (long)cs];
+  NSString *cBot = [NSString stringWithFormat:@"%ld%%C", (long)cw];
+  NSString *xTop = [NSString stringWithFormat:@"%ld%%X", (long)xs];
+  NSString *xBot = [NSString stringWithFormat:@"%ld%%X", (long)xw];
 
   NSFont *font = [NSFont monospacedDigitSystemFontOfSize:6.4 weight:NSFontWeightSemibold];
   NSDictionary *attrs = @{NSFontAttributeName: font, NSForegroundColorAttributeName: [NSColor blackColor]};
 
-  NSSize top1Sz = [top1 sizeWithAttributes:attrs], bot1Sz = [bot1 sizeWithAttributes:attrs];
-  NSSize top2Sz = [top2 sizeWithAttributes:attrs], bot2Sz = [bot2 sizeWithAttributes:attrs];
-  CGFloat colW1 = fmax(top1Sz.width, bot1Sz.width);
-  CGFloat colW2 = fmax(top2Sz.width, bot2Sz.width);
-  CGFloat lineH = fmax(fmax(top1Sz.height, bot1Sz.height), fmax(top2Sz.height, bot2Sz.height));
+  NSSize lblSzS = [lblS sizeWithAttributes:attrs], lblSzW = [lblW sizeWithAttributes:attrs];
+  NSSize cTopSz = [cTop sizeWithAttributes:attrs], cBotSz = [cBot sizeWithAttributes:attrs];
+  NSSize xTopSz = [xTop sizeWithAttributes:attrs], xBotSz = [xBot sizeWithAttributes:attrs];
 
-  CGFloat padX = 1.0, padTop = 1.5, padBottom = 0.5, colGap = 3.0;
-  CGFloat imgW = ceil(padX + colW1 + colGap + colW2 + padX);
+  CGFloat lblW_  = fmax(lblSzS.width, lblSzW.width);
+  CGFloat cColW  = fmax(cTopSz.width, cBotSz.width);   // right-align %C values in this column
+  CGFloat xColW  = fmax(xTopSz.width, xBotSz.width);   // right-align %X values in this column
+  CGFloat lineH  = fmax(fmax(cTopSz.height, cBotSz.height), fmax(xTopSz.height, xBotSz.height));
+
+  CGFloat padX = 1.0, padTop = 1.5, padBottom = 0.5;
+  CGFloat gap = 2.0, divW = 1.0, colGap = 3.0;
+
+  // X positions
+  CGFloat divX    = padX + lblW_ + gap + divW / 2.0;
+  CGFloat cStartX = padX + lblW_ + gap + divW + gap;   // left edge of C column
+  CGFloat xStartX = cStartX + cColW + colGap;           // left edge of X column
+
+  CGFloat imgW = ceil(xStartX + xColW + padX);
   CGFloat imgH = ceil(lineH * 2 + padTop + padBottom);
 
   NSImage *img = [[NSImage alloc] initWithSize:NSMakeSize(imgW, imgH)];
@@ -937,10 +949,29 @@
   CGFloat topY = imgH - padTop - lineH;
   CGFloat botY = padBottom;
 
-  [top1 drawAtPoint:NSMakePoint(padX + colW1 - top1Sz.width, topY) withAttributes:attrs];
-  [bot1 drawAtPoint:NSMakePoint(padX + colW1 - bot1Sz.width, botY) withAttributes:attrs];
-  [top2 drawAtPoint:NSMakePoint(padX + colW1 + colGap, topY) withAttributes:attrs];
-  [bot2 drawAtPoint:NSMakePoint(padX + colW1 + colGap, botY) withAttributes:attrs];
+  // S / W labels
+  [lblS drawAtPoint:NSMakePoint(padX, topY) withAttributes:attrs];
+  [lblW drawAtPoint:NSMakePoint(padX, botY) withAttributes:attrs];
+
+  // %C column — right-aligned
+  [cTop drawAtPoint:NSMakePoint(cStartX + cColW - cTopSz.width, topY) withAttributes:attrs];
+  [cBot drawAtPoint:NSMakePoint(cStartX + cColW - cBotSz.width, botY) withAttributes:attrs];
+
+  // %X column — left-aligned (already same-width due to monospaced digits)
+  [xTop drawAtPoint:NSMakePoint(xStartX, topY) withAttributes:attrs];
+  [xBot drawAtPoint:NSMakePoint(xStartX, botY) withAttributes:attrs];
+
+  // Vertical divider spanning both rows
+  CGFloat descent    = -font.descender;
+  CGFloat capHeight  = font.capHeight;
+  CGFloat divBottom  = botY + descent;
+  CGFloat divTop     = topY + descent + capHeight + 1.0;
+  NSBezierPath *div  = [NSBezierPath bezierPath];
+  div.lineWidth = divW;
+  [[NSColor blackColor] setStroke];
+  [div moveToPoint:NSMakePoint(divX, divBottom)];
+  [div lineToPoint:NSMakePoint(divX, divTop)];
+  [div stroke];
 
   [img unlockFocus];
   img.template = YES;
