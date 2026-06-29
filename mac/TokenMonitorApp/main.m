@@ -957,9 +957,9 @@
   [cTop drawAtPoint:NSMakePoint(cStartX + cColW - cTopSz.width, topY) withAttributes:attrs];
   [cBot drawAtPoint:NSMakePoint(cStartX + cColW - cBotSz.width, botY) withAttributes:attrs];
 
-  // %X column — left-aligned (already same-width due to monospaced digits)
-  [xTop drawAtPoint:NSMakePoint(xStartX, topY) withAttributes:attrs];
-  [xBot drawAtPoint:NSMakePoint(xStartX, botY) withAttributes:attrs];
+  // %X column — right-aligned so the trailing X letter stays in the same position
+  [xTop drawAtPoint:NSMakePoint(xStartX + xColW - xTopSz.width, topY) withAttributes:attrs];
+  [xBot drawAtPoint:NSMakePoint(xStartX + xColW - xBotSz.width, botY) withAttributes:attrs];
 
   // Vertical divider spanning both rows
   CGFloat descent    = -font.descender;
